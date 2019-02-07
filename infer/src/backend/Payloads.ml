@@ -20,6 +20,7 @@ type t =
   ; purity: PurityDomain.summary option
   ; quandary: QuandarySummary.t option
   ; racerd: RacerDDomain.summary option
+  ; semantic_summary: (SemanticSummaryDomain.t * SemanticSummaryDomain.t) option
   ; siof: SiofDomain.Summary.t option
   ; starvation: StarvationDomain.summary option
   ; typestate: TypeState.t option
@@ -37,6 +38,7 @@ let pp pe fmt
     ; purity
     ; quandary
     ; racerd
+    ; semantic_summary
     ; siof
     ; starvation
     ; typestate
@@ -47,7 +49,7 @@ let pp pe fmt
     | None ->
         ()
   in
-  F.fprintf fmt "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a@\n"
+  F.fprintf fmt "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a@\n"
     (pp_opt "Biabduction" (BiabductionSummary.pp pe))
     biabduction (pp_opt "TypeState" TypeState.pp) typestate
     (pp_opt "ClassLoads" ClassLoadsDomain.pp_summary)
@@ -60,6 +62,8 @@ let pp pe fmt
     siof
     (pp_opt "RacerD" RacerDDomain.pp_summary)
     racerd (pp_opt "Litho" LithoDomain.pp) litho
+    (pp_opt "SemanticSummary" SemanticSummaryDomain.pp_summary)
+    semantic_summary 
     (pp_opt "BufferOverrun" BufferOverrunSummary.pp)
     buffer_overrun
     (pp_opt "AnnotationReachability" AnnotReachabilityDomain.pp)
@@ -87,6 +91,7 @@ let empty =
   ; purity= None
   ; quandary= None
   ; racerd= None
+  ; semantic_summary= None
   ; lab_resource_leaks= None
   ; siof= None
   ; starvation= None

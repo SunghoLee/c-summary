@@ -607,6 +607,8 @@ and ( annotation_reachability
     , quandaryBO
     , racerd
     , resource_leak
+    , semantic_summary
+    , semantic_summary_pre
     , siof
     , starvation
     , suggest_nullable
@@ -668,6 +670,12 @@ and ( annotation_reachability
     mk_checker ~long:"racerd" ~deprecated:["-threadsafety"] ~default:true
       "the RacerD thread safety analysis"
   and resource_leak = mk_checker ~long:"resource-leak" ""
+  and semantic_summary =
+    mk_checker ~long:"ss" ~default:false
+      "preanalysis for semantic summary generation"
+  and semantic_summary_pre =
+    mk_checker ~long:"ssp" ~default:false
+      "c/c++ semantic summary generation"
   and siof =
     mk_checker ~long:"siof" ~default:true
       "the Static Initialization Order Fiasco analysis (C++ only)"
@@ -734,6 +742,8 @@ and ( annotation_reachability
   , quandaryBO
   , racerd
   , resource_leak
+  , semantic_summary
+  , semantic_summary_pre
   , siof
   , starvation
   , suggest_nullable
@@ -2900,6 +2910,10 @@ and report_previous = !report_previous
 and reports_include_ml_loc = !reports_include_ml_loc
 
 and resource_leak = !resource_leak
+
+and semantic_summary_pre = !semantic_summary_pre
+
+and semantic_summary = !semantic_summary
 
 and results_dir = !results_dir
 

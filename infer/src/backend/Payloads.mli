@@ -20,6 +20,7 @@ type t =
   ; purity: PurityDomain.summary option
   ; quandary: QuandarySummary.t option
   ; racerd: RacerDDomain.summary option
+  ; semantic_summary: (SemanticSummaryDomain.t* SemanticSummaryDomain.t) option
   ; siof: SiofDomain.Summary.t option
   ; starvation: StarvationDomain.summary option
   ; typestate: TypeState.t option

@@ -589,6 +589,10 @@ val reports_include_ml_loc : bool
 
 val resource_leak : bool
 
+val semantic_summary_pre : bool
+
+val semantic_summary : bool
+
 val results_dir : string
 
 val seconds_per_iteration : float option
