@@ -153,19 +153,37 @@ end
 module Int : sig
     include Basic 
     val create : int -> t
+    val top : t
+    val is_top : t -> bool
+    val unwrap : t -> int
 end = struct
     type t = Int of int
+    | T
+
+    let top = T
+
+    let is_top = function
+    T -> true
+    | _ -> false
 
     let create s = Int s
 
+    let unwrap = function
+        | Int i -> i
+        | _ -> failwith "Cannot unwrap the Top integer."
+
     let compare lhs rhs = 
     match lhs, rhs with
+    | T, T -> 0
+    | T, _ -> 1
+    | _, T -> -1
     | Int s1, Int s2 -> if s1 < s2 then -1
-    else if s1 == s2 then 0
+    else if (phys_equal s1 s2) then 0
     else 1
 
     let pp = function
         Int s -> Printf.sprintf "\"%d\"" s
+    | T -> "T"
 end
 
 module JNIFun : sig
@@ -217,6 +235,35 @@ end = struct
         | JFieldID (sval, s) -> Printf.sprintf "%s - JField: %s" (pp sval) s
 end
 
+module Array = struct
+    include Caml.List
+
+    type t = AbsLoc.t list
+
+    let compare arr1 arr2 = 
+        let comp_res = Caml.List.compare_lengths arr1 arr2 in
+        if (not (phys_equal comp_res 0)) then comp_res
+        else
+            let res = ref 0 in
+            let is_eq = Caml.List.for_all2 (fun x y -> 
+                let loc_comp_res = AbsLoc.compare x y in
+                if (not (phys_equal loc_comp_res 0)) then (res := loc_comp_res; false)
+                else true) arr1 arr2
+            in
+            !res
+
+    let pp arr = 
+        if (phys_equal (length arr) 0) then "Bot"
+        else
+            let fst = ref true in
+            let f i v = 
+                if !fst then (fst := false ; Printf.sprintf "%s%s" i (AbsLoc.pp v))
+                else Printf.sprintf "%s, %s" i (AbsLoc.pp v) 
+            in
+            Printf.sprintf "%s]" (fold_left f "[" arr)
+
+end
+
 module Struct = struct
     include Caml.Map.Make(Typ.Fieldname)
 
@@ -242,21 +289,26 @@ module AbsVal : sig
     val int_to_val : Int.t -> t
     val sval_to_val : Sval.t -> t
     val struct_to_val : AbsLoc.t Struct.t -> t
+    val array_to_val : Array.t -> t
     val val_to_loc : t -> AbsLoc.t
+    val val_to_int : t -> Int.t
     val val_to_str : t -> Str.t
     val val_to_sval : t -> Sval.t
     val val_to_struct : t -> AbsLoc.t Struct.t
+    val val_to_array : t -> Array.t
     val is_int : t -> bool
     val is_str : t -> bool
     val is_loc : t -> bool
     val is_sval : t -> bool
     val is_struct : t -> bool
+    val is_array : t -> bool
 end = struct
     type t = L of AbsLoc.t
     | ConstStr of Str.t
     | ConstInt of Int.t
     | Struct of AbsLoc.t Struct.t
     | Sval of Sval.t
+    | Array of Array.t
     | T
     | B
 
@@ -266,6 +318,7 @@ end = struct
         | ConstInt s -> Int.pp s
         | Sval s -> Sval.pp s
         | Struct s -> Struct.pp s
+        | Array s -> Array.pp s
         | T -> "T"
         | B -> "Bot"
 
@@ -274,6 +327,7 @@ end = struct
     let int_to_val s = ConstInt s
     let sval_to_val s = Sval s
     let struct_to_val s = Struct s
+    let array_to_val s = Array s
 
     let is_int = function
         | ConstInt _ -> true
@@ -295,6 +349,10 @@ end = struct
         | Struct _ -> true
         | _ -> false
 
+    let is_array = function
+        | Array _ -> true
+        | _ -> false
+
     let val_to_loc v = 
         match v with
         | L l -> l
@@ -302,12 +360,19 @@ end = struct
     let val_to_str = function
         ConstStr s -> s
         | _ -> failwith "wrong type"
+    let val_to_int = function
+        ConstInt s -> s
+        | _ -> failwith "wrong type"
     let val_to_sval = function
         Sval s -> s
         | _ -> failwith "wrong type"
     let val_to_struct = function
         Struct s -> s
         | _ -> failwith "wrong type"
+    let val_to_array s = 
+        match s with
+        | Array s -> s
+        | _ -> failwith ("wrong type" ^ (pp s))
     let top = T
     let bot = B
     let compare lhs rhs = 
@@ -775,10 +840,9 @@ end = struct
         | _, T -> T
         | T, _ -> T
         | E m1, E m2 ->
-            if Base.equal (fun v1 v2 -> (phys_equal (AbsLoc.compare v1 v2) 0)) m1 m2 then
-                lhs
-            else 
-                failwith "A variable cannot have mu-1iple addresses"
+            E (Base.union (fun k v1 v2 -> 
+                if (phys_equal (AbsLoc.compare v1 v2) 0) then Some v1 
+                else failwith "A variable cannot have multiple addresses") m1 m2)
 end
 
 module Heap : sig
@@ -789,6 +853,7 @@ module Heap : sig
     val find_opt : AbsLoc.t -> t -> AbstractValueSet.t option
     val iter : (AbsLoc.t -> AbstractValueSet.t -> unit) -> t -> unit
     val fold : (AbsLoc.t -> AbstractValueSet.t -> 'a -> 'a) -> t -> 'a -> 'a
+    val disjoint_union : t -> t -> t
 end = struct
     module Base = Caml.Map.Make(AbsLoc)
     type t = H of (AbstractValueSet.t Base.t)
@@ -830,7 +895,11 @@ end = struct
         match m with
         | T -> (Some AbstractValueSet.top)
         | H m' -> Base.find_opt k m'
-
+    let disjoint_union h1 h2 =
+        match h1, h2 with
+        | T, _ | _, T -> T
+        | H m1, H m2 -> 
+                H (Base.union (fun x v1 v2 -> failwith "Two heaps are not disjoint.") m1 m2)
     let pp = function
         T -> "T"
         | H m -> 

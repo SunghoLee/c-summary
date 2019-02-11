@@ -7,8 +7,8 @@ do
   done
 
 echo "Capturing..."
-infer/bin/infer capture --debug -- clang++ -c $files
+LD_LIBRARY_PATH=/home/eshaj/.opam/ocaml-variants.4.07.1+flambda/lib/z3 infer/bin/infer capture --debug -- clang++ -c $files
 echo "Performing preanalysis for the global environment..."
-infer/bin/infer analyze --ssp-only
+LD_LIBRARY_PATH=/home/eshaj/.opam/ocaml-variants.4.07.1+flambda/lib/z3 infer/bin/infer analyze --ssp-only
 echo "Generating semantic summary for $files..."
-infer/bin/infer analyze --ss-only
+LD_LIBRARY_PATH=/home/eshaj/.opam/ocaml-variants.4.07.1+flambda/lib/z3 infer/bin/infer analyze --ss-only

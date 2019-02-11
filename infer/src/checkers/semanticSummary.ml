@@ -79,17 +79,13 @@ let get_inst_type (i: Sil.instr) =
     | ExitScope _ -> "ExitScope"
 
 let is_struct = Typ.is_cpp_class
-let is_array v = 
-    try let _ = Some (Typ.array_elem None v) in
-    true
-    with _ -> false 
 
 let pp_inst node i = L.progress "%a: [%s] %a\n@." Procdesc.Node.pp_id (Procdesc.Node.get_id node) (get_inst_type i) (Sil.pp_instr ~print_types:true Pp.text) i 
 let pp_domain s d = L.progress "%s %a\n@." s Domain.pp d
 let pp_fun attr = L.progress "%a\n@." ProcAttributes.pp attr
 let is_jni_fun f = 
     let str_name = Typ.Procname.to_string f in
-    String.is_prefix str_name "JNIEnv__"
+    String.is_prefix str_name "JNIEnv__" || String.is_prefix str_name "JavaVM"
 
 module TransferFunctions (CFG : ProcCfg.S) = struct
     module CFG = CFG
@@ -254,11 +250,14 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
         | UnOp (op, e, typ) ->
             L.progress "[Exp]Unop: %a -> T\n@." Exp.pp expr;
             (* do not handle unary operations *)
-            AbstractValueSet.top
+            (* TODO: propagate AbstractValueTop for Integer type *)
+            AbstractValueSet.singleton ((AbsVal.int_to_val Int.top), Cst.cst_t)
         | BinOp (op, e1, e2) -> 
             L.progress "[Exp]Binop: %a -> T\n@." Exp.pp expr;
             (* do not handle binary operations *)
-            AbstractValueSet.top
+            (* TODO: propagate AbstractValueTop for Integer type *)
+            AbstractValueSet.singleton ((AbsVal.int_to_val Int.top), Cst.cst_t)
+            (*AbstractValueSet.top*)
         | Exn typ ->
             L.progress "[Exp]Exn: %a -> T\n@." Exp.pp expr;
             (* do not handle exceptions *)
@@ -307,18 +306,38 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
             in
             AbstractValueSet.fold f base_locv AbstractValueSet.empty
         | Lindex (e1, e2) -> 
-            let arr_set = exec_expr env heap e1 in
+            let arr_loc_set = exec_expr env heap e1 in
+            let arr_set = AbstractValueSet.fold (fun (av_arr_loc, cst_arr_loc) abs -> 
+                let arr_loc = AbsVal.val_to_loc av_arr_loc in
+                let av_arr = Heap.find arr_loc heap in
+                Helper.(abs + Helper.(av_arr ^ cst_arr_loc))) arr_loc_set AbstractValueSet.empty
+            in
             let index_set = exec_expr env heap e2 in
-            (*let f_i (arr, cst_arr) (index, cst_index) vs = 
-                AbstractValueSet.add 
-                *)
             L.progress "[Exp]Lindex: %a\n@." Exp.pp expr;
-            L.progress "ARR: %s\n@." (AbstractValueSet.pp arr_set); 
-            L.progress "INDEX: %s\n@." (AbstractValueSet.pp index_set);
-            AbstractValueSet.empty
+            if (AbstractValueSet.is_top arr_set || AbstractValueSet.is_top index_set) then
+                AbstractValueSet.top
+            else
+                let fold_arr (av_arr, cst_arr) abs = 
+                    let fold_index (av_index, cst_index) abs = 
+                        let int_index = AbsVal.val_to_int av_index in
+                        if Int.is_top int_index then 
+                            (* TODO: join all the elements of the array *)
+                            abs
+                        else
+                            let array_arr = AbsVal.val_to_array av_arr in
+                            let addr_elem = Array.nth array_arr (Int.unwrap int_index) in
+                            let cst_elem = Cst.cst_and cst_arr cst_index in
+                            let av_elem = AbsVal.loc_to_val addr_elem in
+                            AbstractValueSet.add (av_elem, cst_elem) abs
+                    in
+                    AbstractValueSet.fold fold_index index_set abs
+                in
+                AbstractValueSet.fold fold_arr arr_set AbstractValueSet.empty
         | Sizeof data -> 
             L.progress "[Exp]Sizeof: %a\n@." Exp.pp expr;
-            AbstractValueSet.top
+            (* TODO: propagate AbstractValueTop for Integer type *)
+            AbstractValueSet.singleton ((AbsVal.int_to_val Int.top), Cst.cst_t)
+            (*AbstractValueSet.top*)
 
     let is_ret (expr: Exp.t) = 
         match expr with
@@ -479,6 +498,27 @@ end = struct
     let empty = []
 end
 
+module DTyp = struct
+    include Typ
+
+    let get_length typ = 
+        match typ.desc with
+        | Tarray {length = Some len} -> IntLit.to_int_exn len
+        | _ -> -1
+
+    let is_array typ = 
+        match typ.desc with 
+        | Tarray {elt} -> true
+        | _ -> false
+
+    let array_elem typ = 
+        match typ.desc with 
+        | Tarray {elt} -> elt
+        | _ -> 
+                let real_typ = Typ.to_string typ in
+                failwith ("This type is not an array type: " ^ real_typ)
+end
+
 let is_glob_init = ref false
 
 let glob_env = ref Env.empty
@@ -502,28 +542,66 @@ let get_struct typ tenv =
     | _ -> failwith "this typ is not a struct type: %s." (Typ.to_string typ)
 
 (* Make a structure : a map from string (fieldname) to AbsLoc (a location of the field) *)
-let rec mk_new_const_struct tenv typ loc heap = 
-    let s = get_struct typ tenv in
-    let assign_new_loc (h, s) (x, typ, _) = 
-        if is_struct typ then 
+let mk_new_const_struct tenv typ = 
+    let rec new_struct_impl tenv typ heap =
+        let s = get_struct typ tenv in
+        let fill_up_fields (s, h) (x, typ, _) = 
             let nloc = LocationHandler.create_new_constloc () in
-            (mk_new_const_struct tenv typ nloc h, Struct.add x nloc s)
-        else (h, Struct.add x (LocationHandler.create_new_constloc ()) s) 
+            if is_struct typ then 
+                let (sub_str, h') = new_struct_impl tenv typ h in
+                let str_v = AbsVal.struct_to_val sub_str in
+                let str_abs = AbstractValueSet.singleton (str_v, Cst.cst_t) in
+                (Struct.add x nloc s, Heap.add nloc str_abs h')
+            else (Struct.add x (LocationHandler.create_new_constloc ()) s, h)
+        in
+        Caml.List.fold_left fill_up_fields (Struct.empty, heap) s.Typ.Struct.fields
     in
-    let (heap', str) = Caml.List.fold_left assign_new_loc (heap, Struct.empty) s.Typ.Struct.fields in
-    let str_v = AbsVal.struct_to_val str in
-    let abs = AbstractValueSet.singleton (str_v, Cst.cst_t) in
-    Heap.add loc abs heap'
+    new_struct_impl tenv typ Heap.empty
+
+
+let mk_new_const_array_opt tenv typ = 
+    let rec new_array_impl tenv typ heap =
+        let elem_typ = DTyp.array_elem typ in 
+        let length = DTyp.get_length typ in
+        if (phys_equal length (-1)) then None (* do not handle dynamic arrays *)
+        else
+            let rec mk_elem_locs locs length = 
+                if (phys_equal length 0) then Caml.List.rev locs
+                else 
+                    let nloc = LocationHandler.create_new_constloc () in
+                    mk_elem_locs (nloc :: locs) (length - 1)
+            in
+            let elem_locs = mk_elem_locs [] length in
+            if is_struct elem_typ then
+                (* TODO: handle struct type arrays *)
+                None
+            else if DTyp.is_array elem_typ then
+                (* TODO: handle two or more dimension arrays *)
+                None
+            else
+                Some (elem_locs, heap)
+    in
+    new_array_impl tenv typ Heap.empty
+
 
 let init_heap_for_locals vars typs tenv env heap =
     let f h v t = 
         let assign_loc heap from typ =
             if is_struct typ then
-                mk_new_const_struct tenv typ from heap
-            else if is_array typ then
-                (* TODO: handle array type local variables *)
+                let (str, str_heap) = mk_new_const_struct tenv typ in
+                let str_v = AbsVal.struct_to_val str in
+                let str_abs = AbstractValueSet.singleton (str_v, Cst.cst_t) in
+                let merged_heap = Heap.disjoint_union heap str_heap in
+                Heap.add from str_abs merged_heap
+            else if DTyp.is_array typ then
                 let () = L.progress "This is array type: %a\n@." (Typ.pp_full Pp.text) typ in
-                heap
+                match mk_new_const_array_opt tenv typ with
+                | None -> heap
+                | Some (arr, heap') -> 
+                        let arr_v = AbsVal.array_to_val arr in
+                        let arr_abs = AbstractValueSet.singleton (arr_v, Cst.cst_t) in
+                        let merged_heap = Heap.disjoint_union heap heap' in
+                        Heap.add from arr_abs merged_heap
             else
                 let newloc = (LocationHandler.create_new_symbol ()) in
                 Heap.add from (AbstractValueSet.singleton (AbsVal.loc_to_val newloc, Cst.cst_t)) heap
@@ -532,11 +610,21 @@ let init_heap_for_locals vars typs tenv env heap =
     in
     Caml.List.fold_left2 f heap vars typs
 
+module OriginMap = Caml.Map.Make(AbsLoc)
+let glob_originMap = ref OriginMap.empty 
+let originMap = ref OriginMap.empty
+
 let init_heap arg_vars arg_typs tenv env h tmap = 
-    let module OriginMap = Caml.Map.Make(AbsLoc) in
-    let originMap = ref OriginMap.empty in
-    let add_origin from v = (originMap := (OriginMap.add from v !originMap)) in
-    let find_origin l = OriginMap.find l !originMap in
+    let add_origin from v = 
+        L.progress "Add from: %s to: %s\n@." (AbsLoc.pp from) (AbsVal.pp v);
+        L.progress "Before size: %d\n@." (OriginMap.cardinal !originMap);
+        (originMap := (OriginMap.add from v !originMap));
+        L.progress "After size: %d\n@." (OriginMap.cardinal !originMap)
+    in
+    let find_origin l = 
+        L.progress "Finding %s, size: %d\n@." (AbsLoc.pp l) (OriginMap.cardinal !originMap);
+        OriginMap.find l !originMap 
+    in
     let add_to_tmap k v m = 
         match TypMap.find_opt k m with
         | None -> TypMap.add k (LocSet.singleton v) m 
@@ -558,6 +646,22 @@ let init_heap arg_vars arg_typs tenv env h tmap =
                     (Struct.add fn nloc str, h', tmap')
                 in
                 Caml.List.fold_left f (Struct.empty, h, tmap) s.Typ.Struct.fields
+            in
+            let handle_array tmap h l t =
+                let elem_typ = DTyp.array_elem t in 
+                let length = DTyp.get_length t in
+                if (phys_equal length (-1)) then (None, h, tmap) (* do not handle dynamic arrays *)
+                else
+                    let rec mk_elem_locs locs length = 
+                        if (phys_equal length 0) then Caml.List.rev locs
+                        else 
+                            let nloc = LocationHandler.create_new_constloc () in
+                            mk_elem_locs (nloc :: locs) (length - 1)
+                    in
+                    let elem_locs = mk_elem_locs [] length in
+                    let f (h, tmap) l = impl tmap h l elem_typ in
+                    let (h', tmap') = Array.fold_left f (h, tmap) elem_locs in
+                    (Some elem_locs, h', tmap')
             in
             if Typ.is_pointer t then
                 let aliases = pos_aliases l t tmap in
@@ -592,6 +696,16 @@ let init_heap arg_vars arg_typs tenv env h tmap =
                 let sabs = AbstractValueSet.singleton (sabv, Cst.cst_t) in
                 let h'' = Heap.add l sabs h' in
                 (h'', tmap')
+            else if DTyp.is_array t then
+                let (arr_opt, h', tmap') = handle_array tmap h l t in
+                match arr_opt with
+                | None -> (h, tmap) (* do not handle dynamic arrays *)
+                | Some arr -> 
+                        let arr_abv = AbsVal.array_to_val arr in
+                        let () = add_origin l arr_abv in
+                        let arr_abs = AbstractValueSet.singleton (arr_abv, Cst.cst_t) in
+                        let h'' = Heap.add l arr_abs h' in
+                        (h'', tmap')
             else 
                 (h, tmap)
         in
@@ -620,6 +734,7 @@ let init_for_glob tenv =
         let (vars, typs) = PreForGlobal.NameType.fold f nm ([], []) in
         let env = init_env vars Env.empty in
         let (heap, tmap) = init_heap vars typs tenv env Heap.empty TypMap.empty in
+        glob_originMap := !originMap;
         (is_glob_init := true; glob_env := env; glob_heap := heap; glob_tmap := tmap));
     (!glob_env, !glob_heap, !glob_tmap)
 
@@ -638,7 +753,9 @@ let init tenv pdesc : Env.t * Heap.t =
     let (ei, hi, ti) = init_for_glob tenv in
     let env = init_env (arg_vars @ local_vars) ei in
     let hi' = init_heap_for_locals local_vars local_typs tenv env hi in
+    originMap := !glob_originMap;
     let (heap, _) = init_heap arg_vars arg_typs tenv env hi' ti in
+    originMap := OriginMap.empty;
     (env, heap)
 
 let print_state pp fmt (s: Domain.t AbstractInterpreter.State.t) =
