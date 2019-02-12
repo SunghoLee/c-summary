@@ -571,14 +571,17 @@ module LocList : sig
     val cons : AbsLoc.t -> t -> t
     val rev : t -> t
     val empty : t
+    val mem : AbsLoc.t -> t -> bool
 end = struct
     type t = AbsLoc.t list
 
     let empty = []
 
-    let cons a b = a :: b
+    let cons = Caml.List.cons
 
-    let rev l = Caml.List.rev l
+    let rev = Caml.List.rev
+
+    let mem = Caml.List.mem
 
     let rec compare l1 l2 =
         match l1, l2 with
@@ -757,8 +760,10 @@ module Env : sig
     include SDomain
     val add : Var.t -> AbsLoc.t -> t -> t
     val find : Var.t -> t -> AbsLoc.t
+    val filter : (Var.t -> AbsLoc.t -> bool) -> t -> t
     val find_opt : Var.t -> t -> AbsLoc.t option
     val mem : Var.t -> t -> bool
+    val fold : (Var.t -> AbsLoc.t -> 'a -> 'a) -> t -> 'a -> 'a
 end = struct
     module Base = Caml.Map.Make(Var)
 
@@ -789,6 +794,14 @@ end = struct
         | E m1', E m2' -> 
                 if Base.equal AbsLoc.equal m1' m2' then 0
                 else -1
+    let filter f m =
+        match m with
+        | T -> m
+        | E m' -> E (Base.filter f m')
+    let fold f m i =
+        match m with
+        | T -> failwith "Cannot fold top environment."
+        | E m' -> Base.fold f m' i
     let find k m =
         match m with
         | T -> AbsLoc.top
@@ -850,6 +863,7 @@ module Heap : sig
     val add : AbsLoc.t -> AbstractValueSet.t -> t -> t
     val update : AbsLoc.t -> AbsValWCst.t -> t -> t
     val find : AbsLoc.t -> t -> AbstractValueSet.t
+    val filter : (AbsLoc.t -> AbstractValueSet.t -> bool) -> t -> t
     val find_opt : AbsLoc.t -> t -> AbstractValueSet.t option
     val iter : (AbsLoc.t -> AbstractValueSet.t -> unit) -> t -> unit
     val fold : (AbsLoc.t -> AbstractValueSet.t -> 'a -> 'a) -> t -> 'a -> 'a
@@ -884,6 +898,10 @@ end = struct
         | H m1', H m2' -> 
                 if Base.equal AbstractValueSet.equal  m1' m2' then 0
                 else -1
+    let filter f m =
+        match m with
+        | T -> m
+        | H m' -> H (Base.filter f m')
     let find k m =
         match m with
         | T -> AbstractValueSet.top
@@ -957,16 +975,22 @@ module LogUnit : sig
         ; args: LocList.t
         ; heap: Heap.t
         }
-        val compare : t -> t -> int
-        val pp : t -> string
+    val compare : t -> t -> int
+    val pp : t -> string
     val create: AbsLoc.t -> JNIFun.t -> LocList.t -> Heap.t -> t
     val get_heap : t -> Heap.t
+    val get_args : t -> LocList.t
+    val get_ret : t -> AbsLoc.t
+    val get_jfun : t -> JNIFun.t
 end = struct
     type t = {ret: AbsLoc.t; jfun: JNIFun.t; args: LocList.t; heap: Heap.t}
 
     let create r j a h = {ret=r; jfun=j; args=a; heap=h}
 
     let get_heap l = l.heap
+    let get_args l = l.args
+    let get_ret l = l.ret
+    let get_jfun l = l.jfun
 
     let compare (t1: t) (t2: t) = 
         let res_loc = AbsLoc.compare t1.ret t2.ret
@@ -1050,15 +1074,17 @@ end = struct
         | L m1, L m2 -> L (Base.union m1 m2)
 end
 
+type astate = {env:Env.t; heap:Heap.t; logs:CallLogs.t}
+
 module Domain : sig
-    include AbstractDomain.S
+    include AbstractDomain.S with type t = astate
     val empty : t 
     val make : Env.t -> Heap.t -> CallLogs.t -> t
     val to_triple : t -> Env.t * Heap.t * CallLogs.t
     val pp_summary : F.formatter -> t * t -> unit
 end = struct
     (* abstract state *)
-    type t = {env:Env.t; heap:Heap.t; logs:CallLogs.t}
+    type t = astate
 
     let make e h l = {env=e; heap=h; logs=l}
 

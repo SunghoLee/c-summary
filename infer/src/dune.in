@@ -17,6 +17,7 @@ let source_dirs =
        ; "backend"
        ; "biabduction"
        ; "bufferoverrun"
+       ; "summary"
        ; "checkers"
        ; "concurrency"
        ; "integration"

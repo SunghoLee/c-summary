@@ -16,33 +16,6 @@ let var_index = ref 0
 
 let procs = ref PreForGlobal.Procs.empty
 
-module SMTSolver : sig
-    val is_sat : Cst.t -> bool * Cst.t
-end = struct
-    include Z3
-
-    let debug = false 
-
-    let print cst expr sim_expr sim_cst result = 
-        if debug then
-           L.progress "\tEXPR: %s \n\t -> %s \n\t -> %s \n\t -> %s \n\t -> %s\n@." (Cst.pp cst) (Expr.to_string expr) (Expr.to_string sim_expr) (Cst.pp sim_cst) result
-
-    let ctx = 
-        let cfg = [("model", "true")] in
-        mk_context cfg
-
-    let is_sat cst = 
-        let expr = Cst.encode ctx cst in
-        let sim_expr = Expr.simplify expr None in
-        let sim_cst = Cst.decode sim_expr in
-        let solver = Solver.mk_solver ctx None in
-        let res = Solver.check solver [sim_expr] in
-        match res with
-        | UNSATISFIABLE -> print cst expr sim_expr sim_cst "UNSAT"; (false, sim_cst)
-        | UNKNOWN -> print cst expr sim_expr sim_cst "UNKNOWN"; (true, sim_cst)
-        | _ -> print cst expr sim_expr sim_cst "SAT"; (true, sim_cst)
-end 
-
 module LocationHandler = struct
     let create_new_constloc () = var_index := !var_index + 1; AbsLoc.ct_const(!var_index)
     let create_new_symbol () = var_index := !var_index + 1; AbsLoc.ct_symbol(!var_index)
@@ -86,6 +59,9 @@ let pp_fun attr = L.progress "%a\n@." ProcAttributes.pp attr
 let is_jni_fun f = 
     let str_name = Typ.Procname.to_string f in
     String.is_prefix str_name "JNIEnv__" || String.is_prefix str_name "JavaVM"
+let is_accessible_from_java f = 
+    let str_name = Typ.Procname.to_string f in
+    String.is_prefix str_name "Java_"
 
 module TransferFunctions (CFG : ProcCfg.S) = struct
     module CFG = CFG
@@ -771,28 +747,6 @@ let get_astate (s: Domain.t AbstractInterpreter.State.t) =
     val fold: (AbsValWCst.t -> 'a -> 'a) -> t -> 'a -> 'a
     *)
     (* (key -> 'a -> 'b -> 'b) -> 'a t -> 'b -> 'b *)
-let optimize astate = 
-    let (env, heap, logs) = Domain.to_triple astate in
-    let opt_heap l v h = 
-        let opt_abs_set (v, cst) i =
-            match SMTSolver.is_sat cst with
-            | (true, cst') -> AbstractValueSet.add (v, cst') i
-            | _ -> i
-        in
-        let v' = AbstractValueSet.fold opt_abs_set v AbstractValueSet.empty in
-        if AbstractValueSet.is_empty v' then
-            h
-        else
-            Heap.add l v' h
-    in 
-    let opt_logs l = 
-        let h = l.LogUnit.heap in
-        let h' = Heap.fold opt_heap h Heap.empty in
-        { l with LogUnit.heap = h' }
-    in
-    let heap' = Heap.fold opt_heap heap Heap.empty in
-    let logs' = CallLogs.map opt_logs logs in
-    Domain.make env heap' logs' 
 
 let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
     let proc_name = Procdesc.get_proc_name proc_desc in
@@ -803,7 +757,7 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         let proc_data = ProcData.make_default proc_desc tenv in 
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
-                let opt_astate = optimize p in
+                let opt_astate = Optimizer.optimize p in
         let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
         let summ' = {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some (before_astate, opt_astate)}; Summary.proc_desc = proc_desc; Summary.sessions = ref session} in
         Summary.store summ'; 
