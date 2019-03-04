@@ -11,19 +11,20 @@ module F = Format
 module L = Logging
 
 module NameType : sig 
-    include AbstractDomain.S
-    val add : string -> Typ.t -> t -> t  
-    val mem : string -> t -> bool
-    val empty : t 
-    val pp_m : t -> string
-    val union : (string -> Typ.t -> Typ.t -> Typ.t option) -> t -> t -> t 
-    val fold : (string -> Typ.t -> 'a -> 'a) -> t -> 'a -> 'a
+  include AbstractDomain.S
+  val add : string -> Typ.t -> t -> t  
+  val mem : string -> t -> bool
+  val empty : t 
+  val pp_m : t -> string
+  val union : (string -> Typ.t -> Typ.t -> Typ.t option) -> t -> t -> t 
+  val fold : (string -> Typ.t -> 'a -> 'a) -> t -> 'a -> 'a
 end = struct
     module Base = Caml.Map.Make(String)
 
     type t = Typ.t Base.t
 
-    let add s typ t = Base.add s typ t
+    let add s typ t = 
+      Base.add s typ t
 
     let mem s t = Base.mem s t
 
@@ -52,12 +53,12 @@ end = struct
         | _ -> false
 
     let join lhs rhs = 
-        let f k t1 t2 = 
-            match tcomp t1 t2 with
-            | 0 -> Some t1
-            | _ -> failwith "cannot be joined."
-        in
-        union f lhs rhs
+      let f k t1 t2 = 
+        match tcomp t1 t2 with
+        | 0 -> Some t1
+        | _ -> failwith "cannot be joined."
+      in
+      union f lhs rhs
 
     let widen ~prev ~next ~num_iters = join prev next
 
@@ -71,16 +72,18 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
   type extras = ProcData.no_extras
 
   let get_glob_name pvar = 
-      if Pvar.is_global pvar then
-          let tu = Pvar.get_translation_unit pvar in
-          match tu with
-          | Some s -> "#GB_" ^ (SourceFile.to_string s) ^ "_" ^ (Pvar.to_string pvar)
-          | None -> Pvar.to_string pvar
-      else if Pvar.is_local pvar then
-          Mangled.to_string (Pvar.get_name pvar)
-      else failwith "no other variable types in C"
+    if Pvar.is_global pvar then
+      let tu = Pvar.get_translation_unit pvar in
+      match tu with
+      | Some s -> 
+          "#GB_" ^ (SourceFile.to_string s) ^ "_" ^ (Pvar.to_string pvar)
+      | None -> 
+          Pvar.to_string pvar
+    else if Pvar.is_local pvar then
+      Mangled.to_string (Pvar.get_name pvar)
+    else failwith "no other variable types in C"
 
-  let exec_expr m (expr : Exp.t) t : Domain.t =
+  let exec_expr m (expr : Exp.t) t do_strip : Domain.t =
       match expr with
       | Var i -> m
       | UnOp (op, e, typ) -> m
@@ -94,6 +97,9 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
       | Sizeof data -> m
       | Lvar pvar -> 
               if Pvar.is_global pvar then
+                if do_strip then
+                  Domain.add (get_glob_name pvar) (Typ.strip_ptr t) m
+                else 
                  Domain.add (get_glob_name pvar) t m
               else 
                   m
@@ -116,12 +122,18 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
       let post = (
       match instr with
       | Load (id, e1, typ, loc) -> 
-              exec_expr astate e1 typ
+              exec_expr astate e1 typ false
       | Store (e1, typ, e2, loc) -> 
-            exec_expr astate e1 typ 
+          let astate' = exec_expr astate e1 typ false in
+          exec_expr astate' e2 typ true 
       | Prune (e, loc, b, i) -> astate
-      | Call ((id, typ_e1), e1, args, loc, flag) -> 
-            Caml.List.fold_left (fun i (e, t) -> exec_expr i e t) astate args
+      | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) -> 
+          if (Typ.Procname.to_string callee_pname) = "__variable_initialization" then
+            Caml.List.fold_left (fun i (e, t) -> exec_expr i e t false) astate args
+          else
+            Caml.List.fold_left (fun i (e, t) -> exec_expr i e t true) astate args
+      | Call ((id, typ_e1), _, args, loc, flag) -> 
+          failwith "C does not support this!"
       | Nullify (pid, loc) -> astate
       | Abstract loc -> astate
       | ExitScope (id_list, loc) -> astate
