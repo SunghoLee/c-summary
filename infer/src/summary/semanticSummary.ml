@@ -296,6 +296,7 @@ module TransferFunctions = struct
   type extras = ProcData.no_extras
 
   let get_proc_summary caller callee_name = 
+    let () = L.progress "Request summary of %s\n@." (Typ.Procname.to_string callee_name) in
     let sum = 
       Ondemand.analyze_proc_name ~caller_pdesc: caller callee_name 
     in
@@ -336,7 +337,7 @@ module TransferFunctions = struct
           | Cfun _ ->
               AVS.bot
           | Cstr s -> 
-              let str = Str.of_string s in
+              let str = SStr.of_string s in
               AVS.singleton (Val.of_str str, Cst.cst_true)
           | Cfloat _ -> AVS.top
           | Cclass _ -> AVS.bot)
@@ -414,7 +415,7 @@ module TransferFunctions = struct
           let rhs_avs = Helper.load rhs_val heap in
           let heap' = Heap.add lhs_addr rhs_avs heap in
           Domain.make env' heap' logs
-      | Store (Lvar pvar, typ, e2, loc) when ((Mangled.to_string (Pvar.get_name pvar)) = "return") -> (* for return statements *)
+      | Store (Lvar pvar, typ, e2, loc) when Pvar.is_return pvar -> (* for return statements *)
           let rhs_avs = exec_expr env heap e2 in
           let mname = Typ.Procname.to_string (Procdesc.get_proc_name pdesc) in
           let ret_loc = Loc.mk_ret mname in
@@ -543,6 +544,14 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
         let summ' = {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some (before_astate, opt_astate)}; Summary.proc_desc = proc_desc; Summary.sessions = ref session} in
         Summary.store summ'; 
+        (if JniModel.is_java_native proc_name then
+          let ldg = LogDepGraph.mk_ldg opt_astate.logs in
+          let dot_graph = LogDepGraph.DotPrinter.DotGraph.to_dot_graph ldg in
+          let graph_str = F.asprintf "%a" LogDepGraph.DotPrinter.DotGraph.pp dot_graph in
+          let oc = open_out ((Typ.Procname.to_string proc_name) ^ ".out") in
+          let () = Printf.fprintf oc "%s" graph_str in
+          close_out oc
+        );
         L.progress "Final: %a\n@." SemanticSummaryDomain.pp opt_astate;
         summ'
         | None -> summary

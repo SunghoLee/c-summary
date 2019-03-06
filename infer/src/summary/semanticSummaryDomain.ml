@@ -105,12 +105,12 @@ module Var = struct
   let pp fmt = function Var (s, _) -> F.fprintf fmt "%s" s
 end
 
-module Str = struct
+module SStr = struct
   type t = String of string [@@deriving compare]
 
   let of_string s = String s
 
-  let pp fmt = function String s -> F.fprintf fmt "\"%s\"" s
+  let pp fmt = function String s -> F.fprintf fmt "\'%s\'" s
 end
 
 module Int = struct
@@ -124,7 +124,7 @@ module Int = struct
 
   let to_int = function Int i -> i | _ -> failwith "Cannot unwrap the Top integer."
 
-  let pp fmt = function Int i -> F.fprintf fmt "\"%d\"" i | Top -> F.fprintf fmt "T"
+  let pp fmt = function Int i -> F.fprintf fmt "\'%d\'" i | Top -> F.fprintf fmt "T"
 end
 
 module JNIFun = struct
@@ -188,7 +188,7 @@ module Val = struct
   type t = Bot
     | Top
     | Loc of Loc.t
-    | Str of Str.t
+    | Str of SStr.t
     | Int of Int.t
     | Struct of Loc.t Struct.t
     | Array of Array.t
@@ -261,7 +261,7 @@ module Val = struct
     | Loc l -> 
       F.fprintf fmt "%a" Loc.pp l
     | Str s -> 
-      F.fprintf fmt "%a" Str.pp s
+      F.fprintf fmt "%a" SStr.pp s
     | Int i -> 
       F.fprintf fmt "%a" Int.pp i
     | Struct s -> 

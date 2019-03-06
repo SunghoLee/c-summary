@@ -4,7 +4,7 @@ module F = Format
 module L = Logging
 
 let skip_prefixs = 
-  [ "JNIEnv__"
+  [ "_JNIEnv_"
   ; "JavaVM" ]
 
 let jni_obj_typ = 
