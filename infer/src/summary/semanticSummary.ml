@@ -90,33 +90,6 @@ module Initializer = struct
           failwith ("The structure cannot be found in a type environment: " ^ (Typ.to_string typ)))
     | _ -> failwith ("this typ is not a struct type: " ^ (Typ.to_string typ))
 
-
-  (*
-let mk_new_const_array_opt tenv typ = 
-    let rec new_array_impl tenv typ heap =
-        let elem_typ = DTyp.array_elem typ in 
-        let length = DTyp.get_length typ in
-        if (phys_equal length (-1)) then None (* do not handle dynamic arrays *)
-        else
-            let rec mk_elem_locs locs length = 
-                if (phys_equal length 0) then Caml.List.rev locs
-                else 
-                    let nloc = LocationHandler.create_new_constloc () in
-                    mk_elem_locs (nloc :: locs) (length - 1)
-            in
-            let elem_locs = mk_elem_locs [] length in
-            if is_struct elem_typ then
-                (* TODO: handle struct type arrays *)
-                None
-            else if DTyp.is_array elem_typ then
-                (* TODO: handle two or more dimension arrays *)
-                None
-            else
-                Some (elem_locs, heap)
-    in
-    new_array_impl tenv typ Heap.empty
-    *)
-
   let rec init_heap : 
     (Loc.t * bool * Typ.t) list 
     -> Tenv.t 
@@ -208,25 +181,6 @@ let mk_new_const_array_opt tenv typ =
           let str_val = Val.of_struct str in
           let str_avs = AVS.singleton (str_val, Cst.cst_true) in
           Heap.add loc str_avs heap'
-          (*
-          let length = IntLit.to_int_exn i in
-          let rec mk_loc_list = fun i loc_list ->
-            if i = 0 then
-              Caml.List.rev loc_list
-            else
-              let nloc = Loc.new_const_loc () in
-              mk_loc_list (i - 1) (nloc :: loc_list)
-          in
-          let iter_loc = fun heap loc ->
-            let heap', tmap' = init_heap [loc, true, elt] tenv heap tmap in
-            heap'
-          in
-          let arr_locs = mk_loc_list length [] in
-          let arr_val = Val.of_array arr_locs in
-          let arr_avs = AVS.singleton (arr_val, Cst.cst_true) in
-          let heap' = Heap.add loc arr_avs heap in
-          Caml.List.fold_left iter_loc heap' arr_locs
-          *)
       | _ ->
           let () = L.progress "Do not handle dynamic size array" in
           heap          
@@ -318,11 +272,12 @@ module TransferFunctions = struct
           let loc = Env.find var env in
           Heap.find loc heap
       | UnOp (op, e, typ) ->
-          (* do not handle unary operations *)
-          AVS.singleton ((Val.of_int Int.top), Cst.cst_true)
+          let v = exec_expr env heap e in
+          AbstractOperators.unop op v
       | BinOp (op, e1, e2) -> 
-          (* do not handle binary operations *)
-          AVS.singleton ((Val.of_int Int.top), Cst.cst_true)
+          let lhs = exec_expr env heap e1 in
+          let rhs = exec_expr env heap e2 in
+          AbstractOperators.binop op lhs rhs
       | Exn typ ->
           (* do not handle exceptions *)
           AVS.top
@@ -342,7 +297,8 @@ module TransferFunctions = struct
           | Cfloat _ -> AVS.top
           | Cclass _ -> AVS.bot)
       | Cast (typ, e) ->
-          AVS.top
+          (* TODO: need type casting? *)
+          exec_expr env heap e
       | Lvar pvar -> (* Location of a variable *)
           let var = Var.of_pvar pvar in
           let loc = Env.find var env in
@@ -395,8 +351,9 @@ module TransferFunctions = struct
           in
           AVS.fold it_arr arr_avs AVS.empty
       | Sizeof data -> 
-          AVS.singleton (Val.of_int (Int.top), Cst.cst_true)
-
+          (* TODO: does not always return a constant 1 *)
+          AVS.singleton (Val.of_int (Int.of_int 1), Cst.cst_true)
+          (* AVS.singleton (Val.of_int (Int.top), Cst.cst_true) *)
 
   let exec_instr : Domain.t -> extras ProcData.t -> CFG.Node.t -> Sil.instr -> Domain.t = 
     fun {env; heap; logs} {pdesc; tenv; extras} node instr ->
@@ -458,6 +415,20 @@ module TransferFunctions = struct
           let log = LogUnit.make ret_loc jnifun arg_locs dumped_heap in
           let logs' = CallLogs.add log logs in  
           Domain.make env' heap'' logs'
+      | Call ((id, ret_typ), (Const (Cfun callee_pname)), args, loc, flag) when SemanticModels.is_modeled callee_pname -> (* for modeled functions for summary generation *)
+          let lhs_var = Var.of_id id in
+          let env' = 
+            if Env.mem lhs_var env then
+              env
+            else (* for temporal variables *)
+              Env.add lhs_var (Loc.new_const_loc ()) env
+          in
+          let lhs_loc = Env.find lhs_var env' in
+          let args_avs = 
+            Caml.List.map (fun (arg_expr, _) -> 
+              exec_expr env' heap arg_expr) args 
+          in
+          SemanticModels.apply_semantics lhs_var (Typ.Procname.to_string callee_pname) args_avs env' heap logs
       | Call ((id, ret_typ), (Const (Cfun callee_pname)), args, loc, flag) -> 
           let lhs_var = Var.of_id id in
           let env' = 

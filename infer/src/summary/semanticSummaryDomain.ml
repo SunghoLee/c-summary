@@ -13,6 +13,7 @@ module L = Logging
 
 module Loc = struct
   type t = Bot
+  | Top
   | ConstLoc of int
   | Pointer of t
   | Ret of string
@@ -22,7 +23,11 @@ module Loc = struct
 
   let bot = Bot
 
+  let top = Top
+
   let is_bot = function Bot -> true | _ -> false
+
+  let is_top = function Top -> true | _ -> false
 
   let is_const = function ConstLoc _ -> true | _ -> false
 
@@ -46,15 +51,12 @@ module Loc = struct
 
   let rec pp fmt = function
     Bot -> F.fprintf fmt "bot"
+    | Top -> F.fprintf fmt "top"
     | ConstLoc i -> F.fprintf fmt "C#%d" i
     | Pointer p -> F.fprintf fmt "*( %a )" pp p
     | Ret s -> F.fprintf fmt "R#%s" s
 
-  let rec to_string = function
-    Bot -> "bot"
-    | ConstLoc i -> Printf.sprintf "C#%d" i
-    | Pointer p -> Printf.sprintf "*( %s )" (to_string p)
-    | Ret s -> Printf.sprintf "R#%s" s
+  let rec to_string i = F.asprintf "%a" pp i
 
 end
 
@@ -125,6 +127,118 @@ module Int = struct
   let to_int = function Int i -> i | _ -> failwith "Cannot unwrap the Top integer."
 
   let pp fmt = function Int i -> F.fprintf fmt "\'%d\'" i | Top -> F.fprintf fmt "T"
+
+  let ( + ) lhs rhs =
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        Int (i1 + i2)
+
+  let ( - ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        Int (i1 - i2)
+
+  let ( * ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        Int (i1 * i2)
+
+  let ( / ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 when i2 = 0 ->
+        top
+    | Int i1, Int i2 ->
+        Int (i1 / i2)
+
+  let ( % ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 when i2 = 0 ->
+        top
+    | Int i1, Int i2 ->
+        Int (i1 % i2)
+
+  let ( << ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        Int ((lsl) i1 i2)
+
+  let ( >> ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        Int ((lsr) i1 i2)
+
+  let ( < ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        if i1 < i2 then Int 1 else Int 0
+
+  let ( <= ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        if i1 <= i2 then Int 1 else Int 0
+
+  let ( > ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        if i1 > i2 then Int 1 else Int 0
+
+  let ( >= ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        if i1 >= i2 then Int 1 else Int 0
+
+  let ( = ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        if i1 = i2 then Int 1 else Int 0
+
+  let ( != ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        if not (phys_equal i1 i2) then Int 1 else Int 0
+
+  let ( & ) lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        Int ((land) i1 i2)
+
+  let b_or lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        Int ((lor) i1 i2)
+
+  let b_xor lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        Int ((lxor) i1 i2)
+
+  let l_and lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        if i1 <> 0 && i2 <> 0 then Int 1 else Int 0
+
+  let l_or lhs rhs = 
+    match lhs, rhs with
+    | Top, _ | _, Top -> Top
+    | Int i1, Int i2 ->
+        if i1 <> 0 || i2 <> 0 then Int 1 else Int 0
 end
 
 module JNIFun = struct
