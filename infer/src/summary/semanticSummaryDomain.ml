@@ -16,6 +16,7 @@ module Loc = struct
   | Top
   | ConstLoc of int
   | Pointer of t
+  | Offset of t * int
   | Ret of string
   [@@deriving compare]
 
@@ -35,6 +36,10 @@ module Loc = struct
 
   let is_ret = function Ret _ -> true | _ -> false
 
+  let is_offset = function Offset _ -> true | _ -> false
+
+  let is_offset_of loc = function Offset (l, _) -> loc = l | _ -> false
+
   let mk_const i = ConstLoc i
 
   let mk_pointer i = Pointer i
@@ -42,6 +47,8 @@ module Loc = struct
   let mk_ret i = Ret i
 
   let mk_ret_of_pname pname = Typ.Procname.to_string pname |> mk_ret
+
+  let mk_offset l i = Offset (l, i)
 
   let unwrap_ptr = function Pointer l -> l | _ -> failwith "This location is not a pointer."
 
@@ -54,6 +61,7 @@ module Loc = struct
     | Top -> F.fprintf fmt "top"
     | ConstLoc i -> F.fprintf fmt "C#%d" i
     | Pointer p -> F.fprintf fmt "*( %a )" pp p
+    | Offset (l, i) -> F.fprintf fmt "%a@%d" pp l i
     | Ret s -> F.fprintf fmt "R#%s" s
 
   let rec to_string i = F.asprintf "%a" pp i
@@ -108,11 +116,16 @@ module Var = struct
 end
 
 module SStr = struct
-  type t = String of string [@@deriving compare]
+  type t = Top | String of string [@@deriving compare]
+
+  let top = Top 
 
   let of_string s = String s
 
-  let pp fmt = function String s -> F.fprintf fmt "\'%s\'" s
+  let pp fmt = function 
+    Top -> 
+      F.fprintf fmt "\'T_str\'"
+    |  String s -> F.fprintf fmt "\'%s\'" s
 end
 
 module Int = struct
@@ -298,6 +311,19 @@ module Struct = struct
   let pp = pp ~pp_value:Loc.pp
 end
 
+module Freezed = struct
+  type t = ArrayLookup of Loc.t * Int.t
+  [@@deriving compare]
+
+  let freeze_lookup loc index = 
+    ArrayLookup (loc, index)
+
+  let pp fmt f =
+    match f with
+    | ArrayLookup (loc, index) ->
+        F.fprintf fmt "[! %a[%a] !]" Loc.pp loc Int.pp index
+end
+
 module Val = struct
   type t = Bot
     | Top
@@ -309,63 +335,8 @@ module Val = struct
     | JClass of JClass.t
     | JMethodID of JMethodID.t
     | JFieldID of JFieldID.t
+    | Freezed of Freezed.t
     [@@deriving compare]
-
-  let bot = Bot
-
-  let top = Top
-
-  let of_loc l = Loc l
-
-  let of_str s = Str s
-  
-  let of_int i = Int i
-
-  let of_struct s = Struct s
-
-  let of_array a = Array a
-
-  let of_jclass jc = JClass jc
-
-  let of_jmethod_id jm = JMethodID jm
-
-  let of_jfield_id jf = JFieldID jf
-
-  let is_bot = function Bot -> true | _ ->false
-
-  let is_top = function Top -> true | _ ->false
-
-  let is_loc = function Loc _ -> true | _ -> false
-
-  let is_str = function Str _ -> true | _ -> false
-
-  let is_int = function Int _ -> true | _ -> false
-
-  let is_struct = function Struct _ -> true | _ -> false
-
-  let is_array = function Array _ -> true | _ -> false
-
-  let is_jclass = function JClass _ -> true | _ -> false
-
-  let is_jmethod_id = function JMethodID _ -> true | _ -> false
-
-  let is_jfield_id  = function JFieldID _ -> true | _ -> false
-
-  let to_loc = function Loc l -> l | _ -> failwith "Wrong type argument."
-
-  let to_str = function Str s -> s | _ -> failwith "Wrong type argument."
-
-  let to_int = function Int i -> i | _ -> failwith "Wrong type argument."
-
-  let to_struct = function Struct s -> s | _ -> failwith "Wrong type argument."
-
-  let to_array = function Array a -> a | _ -> failwith "Wrong type argument."
-
-  let to_jclass = function JClass jc -> jc | _ -> failwith "Wrong type argument."
-
-  let to_jmethod_id = function JMethodID jm -> jm | _ -> failwith "Wrong type argument."
-
-  let to_jfield_id = function JFieldID ji -> ji | _ -> failwith "Wrong type argument."
 
   let pp fmt = function
     Bot -> 
@@ -388,6 +359,71 @@ module Val = struct
       F.fprintf fmt "%a" JMethodID.pp jm
     | JFieldID jf -> 
       F.fprintf fmt "%a" JFieldID.pp jf
+    | Freezed f -> 
+      F.fprintf fmt "%a" Freezed.pp f
+
+  let bot = Bot
+
+  let top = Top
+
+  let of_loc l = Loc l
+
+  let of_str s = Str s
+  
+  let of_int i = Int i
+
+  let of_struct s = Struct s
+
+  let of_array a = Array a
+
+  let of_jclass jc = JClass jc
+
+  let of_jmethod_id jm = JMethodID jm
+
+  let of_jfield_id jf = JFieldID jf
+
+  let of_freezed f = Freezed f
+
+  let is_bot = function Bot -> true | _ ->false
+
+  let is_top = function Top -> true | _ ->false
+
+  let is_loc = function Loc _ -> true | _ -> false
+
+  let is_str = function Str _ -> true | _ -> false
+
+  let is_int = function Int _ -> true | _ -> false
+
+  let is_struct = function Struct _ -> true | _ -> false
+
+  let is_array = function Array _ -> true | _ -> false
+
+  let is_jclass = function JClass _ -> true | _ -> false
+
+  let is_jmethod_id = function JMethodID _ -> true | _ -> false
+
+  let is_jfield_id  = function JFieldID _ -> true | _ -> false
+
+  let is_freezed = function Freezed _ -> true | _ -> false
+
+  let to_loc = function Loc l -> l | _ as arg -> failwith (F.asprintf "Wrong type argument: %a" pp arg)
+
+  let to_str = function Str s -> s | _ -> failwith "Wrong type argument."
+
+  let to_int = function Int i -> i | _ -> failwith "Wrong type argument."
+
+  let to_struct = function Struct s -> s | _ as arg -> failwith (F.asprintf "Wrong type argument: %a" pp arg)
+
+  let to_array = function Array a -> a | _ -> failwith "Wrong type argument."
+
+  let to_jclass = function JClass jc -> jc | _ -> failwith "Wrong type argument."
+
+  let to_jmethod_id = function JMethodID jm -> jm | _ -> failwith "Wrong type argument."
+
+  let to_jfield_id = function JFieldID ji -> ji | _ -> failwith "Wrong type argument."
+
+  let to_freezed = function Freezed f -> f | _ -> failwith "Wrong type argument."
+
 end
 
 module Cst = struct
@@ -553,10 +589,23 @@ module AVS = struct
   let ( <= ) = subset
 
   let join = union
+
+  let pp fmt avs = 
+    if is_empty avs then 
+      F.fprintf fmt "Bot"
+    else
+      pp fmt avs
 end 
 
 module Env = struct
   include PrettyPrintable.MakePPMap(Var)
+
+  let find v env = 
+    match find_opt v env with
+    | Some l ->
+        l
+    | None ->
+        Loc.bot
 
   let ( <= ) lhs rhs = 
     let f = fun key value -> 
@@ -580,11 +629,38 @@ end
 
 module InstEnv = struct
   include PrettyPrintable.MakePPMap(Loc)
+
+  let find loc ienv =
+    match find_opt loc ienv with
+    | Some s -> 
+        s
+    | None ->
+        AVS.bot
+
   let pp = pp ~pp_value: AVS.pp
 end
 
 module Heap = struct
   include PrettyPrintable.MakePPMap(Loc) 
+
+  let find_offsets_of l heap =
+    let filter_offset : Loc.t -> AVS.t -> bool =
+      fun loc avs ->
+        match loc with
+        | Offset (loc, _) ->
+            loc = l
+        | _ ->
+            false
+    in
+    filter filter_offset heap
+
+
+  let find l heap =
+    match find_opt l heap with
+    | Some avs ->
+        avs
+    | None ->
+        AVS.bot
 
   let ( <= ) lhs rhs =
     let f = fun key val1 ->

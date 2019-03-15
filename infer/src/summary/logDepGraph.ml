@@ -256,7 +256,6 @@ module DotPrinter = struct
             false, imap
         | None ->
             let nid = new_index () in
-            let () = L.progress "INDEX: %d\n@." nid in
             let imap' = IndexMap.add n nid imap in
             true, imap'
       in

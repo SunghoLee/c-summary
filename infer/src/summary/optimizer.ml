@@ -32,7 +32,7 @@ module LocSet = struct
   include PrettyPrintable.MakePPSet(Loc)
 end
 
-let opt_heap heap locs = 
+let opt_cst_in_heap heap =
   let opt_avs_heap = fun loc avs heap ->
     let opt_avs = fun (value, cst) avs ->
       match SMTSolver.is_sat cst with
@@ -47,19 +47,46 @@ let opt_heap heap locs =
     else
       Heap.add loc value' heap
   in
-  let heap' = Heap.fold opt_avs_heap heap Heap.empty in
+  Heap.fold opt_avs_heap heap Heap.empty
+
+let opt_heap heap locs = 
+  let heap' = opt_cst_in_heap heap in
   let f_heap_closure = fun locset loc ->
-    let rec f_avs_closure = fun (value, _) locset ->
-      if Val.is_loc value then
-        let loc = Val.to_loc value in
-        let locset' = LocSet.add loc locset in
-        match Heap.find_opt loc heap' with
-        | Some avs -> 
-            AVS.fold f_avs_closure avs locset'
-        | None ->
-            locset'
-      else 
-        locset
+    let rec f_avs_closure: ValCst.t -> LocSet.t -> LocSet.t  = 
+      fun (value, _) locset ->
+        let offset_closure = fun loc locset ->
+          Heap.find_offsets_of loc heap'
+          |> (fun x -> Heap.fold (fun l avs locset ->
+              LocSet.add l locset
+              |> AVS.fold f_avs_closure avs) x locset)
+        in
+        match value with
+        | Loc loc ->
+            let locset' = 
+              LocSet.add loc locset
+              |> offset_closure loc 
+            in
+            (match Heap.find_opt loc heap' with
+            | Some avs -> 
+                AVS.fold f_avs_closure avs locset'
+            | None ->
+                locset')
+        | Struct str ->
+            let str = Val.to_struct value in
+            let f_fields = fun field loc locset ->
+              let locset' = 
+                LocSet.add loc locset 
+                |> offset_closure loc
+              in
+              (match Heap.find_opt loc heap' with
+              | Some avs ->
+                  AVS.fold f_avs_closure avs locset'
+              | None ->
+                  locset')
+            in
+            Struct.fold f_fields str locset
+        | _ -> 
+            locset
     in
     let locset' = LocSet.add loc locset in
     match Heap.find_opt loc heap' with
@@ -79,15 +106,15 @@ let opt_logs logs =
   in
   CallLogs.map opt_unit logs
 
-let rm_redundant state = 
+let rm_redundant state f_name = 
   let env = Domain.get_env state in
   let heap = Domain.get_heap state in
   let logs = Domain.get_logs state in 
   let env' = Env.filter (fun v _ -> not (Var.is_temporal v)) env in
-  let non_temp_locs = Env.fold (fun _ loc loclist -> loc :: loclist) env' [] in
+  let non_temp_locs = Env.fold (fun _ loc loclist -> loc :: loclist) env' [Loc.mk_ret f_name] in
   let heap' = opt_heap heap non_temp_locs in
   let logs' = opt_logs logs in
   Domain.make env' heap' logs'
 
-let optimize astate = 
-  rm_redundant astate
+let optimize astate f_name = 
+  rm_redundant astate f_name

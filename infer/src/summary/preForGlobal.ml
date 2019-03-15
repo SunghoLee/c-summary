@@ -10,59 +10,24 @@ open Core
 module F = Format
 module L = Logging
 
-module NameType : sig 
-  include AbstractDomain.S
-  val add : string -> Typ.t -> t -> t  
-  val mem : string -> t -> bool
-  val empty : t 
-  val pp_m : t -> string
-  val union : (string -> Typ.t -> Typ.t -> Typ.t option) -> t -> t -> t 
-  val fold : (string -> Typ.t -> 'a -> 'a) -> t -> 'a -> 'a
-end = struct
-    module Base = Caml.Map.Make(String)
+module NameType = struct
+  include PrettyPrintable.MakePPMonoMap(struct include Pvar let pp = pp Pp.text end)(struct include Typ let pp = pp_full Pp.text end)
 
-    type t = Typ.t Base.t
 
-    let add s typ t = 
-      Base.add s typ t
+  let ( <= ) ~lhs ~rhs = 
+    (fun var typ ->
+      mem var rhs && (find var lhs) = (find var rhs))
+    |> (fun x -> for_all x lhs)
 
-    let mem s t = Base.mem s t
+  let join lhs rhs = 
+    (fun var typ1 typ2 ->
+      if typ1 = typ2 then
+        Some typ1
+      else
+        failwith "cannot be joined.")
+    |> (fun x -> union x lhs rhs)
 
-    let empty = Base.empty
-
-    let union f t1 t2 = Base.union f t1 t2
-
-    let fold f t i = Base.fold f t i
-
-    let pp_m m =  
-        let fst = ref true in
-        let f v l i = if !fst then (fst := false ; Printf.sprintf "%s%s -> %s" i v (Typ.to_string l)) else Printf.sprintf "%s, %s -> %s" i v (Typ.to_string l) in
-        Printf.sprintf "%s]" (fold f m "[")
-
-    (* top and bottom *)
-    let top = empty
-
-    (* is top or bottom? *)
-    let is_top = Base.is_empty
-
-    let tcomp = [%compare: Typ.t]
-
-    let ( <= ) ~lhs ~rhs = 
-        match Base.compare tcomp lhs rhs with
-        | x when x <= 0 -> true
-        | _ -> false
-
-    let join lhs rhs = 
-      let f k t1 t2 = 
-        match tcomp t1 t2 with
-        | 0 -> Some t1
-        | _ -> failwith "cannot be joined."
-      in
-      union f lhs rhs
-
-    let widen ~prev ~next ~num_iters = join prev next
-
-    let pp f m = F.pp_print_string f (Printf.sprintf "%s" (pp_m m))
+  let widen ~prev ~next ~num_iters = join prev next
 end
 
 module TransferFunctions (CFG : ProcCfg.S) = struct
@@ -98,9 +63,9 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
       | Lvar pvar -> 
               if Pvar.is_global pvar then
                 if do_strip then
-                  Domain.add (get_glob_name pvar) (Typ.strip_ptr t) m
+                  Domain.add pvar (Typ.strip_ptr t) m
                 else 
-                 Domain.add (get_glob_name pvar) t m
+                 Domain.add pvar t m
               else 
                   m
 
