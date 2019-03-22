@@ -11,26 +11,98 @@ open Pervasives
 module F = Format
 module L = Logging
 
+module Var = struct
+  type t = {name: string; proc: var_scope; kind: var_kind}
+  [@@deriving compare]
+
+  and var_kind = Temp | Local | Global
+  [@@deriving compare]
+
+  and var_scope = GB | Proc of string
+
+  let mk_scope s = Proc s
+
+  let of_string ?(proc=GB) s =
+    if String.is_prefix s "#GB" then
+      {name = s; proc = proc; kind = Global}
+    else if String.contains s '$' then
+      {name = s; proc = proc; kind = Temp}
+    else
+      {name = s; proc = proc; kind = Local}
+
+  let of_id ?(proc=GB) id = 
+    let id_name = Ident.get_name id in
+    let stamp = Ident.get_stamp id in
+    of_string ((Ident.name_to_string id_name) ^ "$" ^ (string_of_int stamp)) ~proc
+
+  let of_pvar ?(proc=GB) pvar = 
+    (if Pvar.is_global pvar then
+      match Pvar.get_translation_unit pvar with
+      | Some s ->
+          "#GB_" ^ (SourceFile.to_string s) ^ "_" ^ (Pvar.to_string pvar)
+          |> of_string
+      | None ->
+          Pvar.to_string pvar
+          |> of_string 
+    else if Pvar.is_local pvar then
+      Mangled.to_string (Pvar.get_name pvar)
+      |> (fun x -> of_string x ~proc)
+    else
+      failwith "no other variable types in C")
+
+  let is_global {kind} = 
+    match kind with Global -> true | _ -> false
+
+  let is_temporal {kind} = 
+    match kind with Temp -> true | _ -> false
+
+  let is_local {kind} = 
+    match kind with Local -> true | _ -> false
+
+  let pp fmt {name} = F.fprintf fmt "%s" name
+
+  let pp_scope fmt proc = 
+    match proc with
+    | GB -> 
+        F.fprintf fmt "Global"
+    | Proc s ->
+        F.fprintf fmt "%s" s
+
+  let pp_var_scope fmt {proc} = pp_scope fmt proc
+
+end
+
 module Loc = struct
   type t = Bot
   | Top
-  | ConstLoc of int
+  | ConstLoc of Var.t
+  | DynLoc of int
   | Pointer of t
-  | Offset of t * int
+  | Offset of t * index
   | Ret of string
   [@@deriving compare]
 
-  let loc_index = ref 0
+  and index = IndexTop
+  | I of int
+  | F of string
+  | E of t
+  [@@deriving compare]
+
+  let dyn_num = ref 0
 
   let bot = Bot
 
   let top = Top
+
+  let index_top = IndexTop
 
   let is_bot = function Bot -> true | _ -> false
 
   let is_top = function Top -> true | _ -> false
 
   let is_const = function ConstLoc _ -> true | _ -> false
+
+  let is_dyn = function DynLoc _ -> true | _ -> false
 
   let is_pointer = function Pointer _ -> true | _ -> false
 
@@ -40,7 +112,9 @@ module Loc = struct
 
   let is_offset_of loc = function Offset (l, _) -> loc = l | _ -> false
 
-  let mk_const i = ConstLoc i
+  let mk_const v = ConstLoc v
+
+  let mk_dyn () = (dyn_num := !dyn_num + 1; DynLoc !dyn_num)
 
   let mk_pointer i = Pointer i
 
@@ -50,70 +124,32 @@ module Loc = struct
 
   let mk_offset l i = Offset (l, i)
 
+  let mk_index_of_string s = F s
+
+  let mk_index_of_int i = I i
+
+  let mk_index_of_expr e = E e
+
   let unwrap_ptr = function Pointer l -> l | _ -> failwith "This location is not a pointer."
-
-  let new_const_loc () = loc_index := !loc_index + 1; ConstLoc !loc_index
-
-  let get_index = function ConstLoc i -> i | _ -> failwith "It is not a constant location."
 
   let rec pp fmt = function
     Bot -> F.fprintf fmt "bot"
     | Top -> F.fprintf fmt "top"
-    | ConstLoc i -> F.fprintf fmt "C#%d" i
+    | ConstLoc i -> F.fprintf fmt "CL#%a(%a)" Var.pp i Var.pp_var_scope i
+    | DynLoc i -> F.fprintf fmt "DL#%d" i
     | Pointer p -> F.fprintf fmt "*( %a )" pp p
-    | Offset (l, i) -> F.fprintf fmt "%a@%d" pp l i
-    | Ret s -> F.fprintf fmt "R#%s" s
+    | Offset (l, i) -> F.fprintf fmt "%a@%a" pp l pp_index i
+    | Ret s -> F.fprintf fmt "Ret#%s" s
+  and pp_index fmt = function
+    | IndexTop -> F.fprintf fmt "Top"
+    | I i -> F.fprintf fmt "%d" i
+    | F s -> F.fprintf fmt "%s" s
+    | E l -> pp fmt l
 
-  let rec to_string i = F.asprintf "%a" pp i
+  let to_string i = F.asprintf "%a" pp i
 
 end
 
-module Var = struct
-  type scope = Local | Global | Temporal [@@deriving compare]
-
-  type t = Var of string * scope [@@deriving compare]
-
-  let of_string s = 
-    if String.is_prefix s "#GB" then 
-      (Var (s, Global))
-    else if String.contains s '$' then 
-      (Var (s, Temporal))
-    else 
-      (Var (s, Local))
-
-  let of_id id = 
-    let id_name = Ident.get_name id in
-    let stamp = Ident.get_stamp id in
-    of_string ((Ident.name_to_string id_name)
-      ^ "$" 
-      ^ (string_of_int stamp))
-
-  let of_pvar pvar = 
-    let name = 
-      if Pvar.is_global pvar then
-        let tran_unit = Pvar.get_translation_unit pvar in
-        match tran_unit with
-        | Some s -> 
-            "#GB_" 
-            ^ (SourceFile.to_string s) 
-            ^ "_" 
-            ^ (Pvar.to_string pvar)
-        | None -> 
-            Pvar.to_string pvar
-        else if Pvar.is_local pvar then
-          Mangled.to_string (Pvar.get_name pvar)
-        else failwith "no other variable types in C"
-    in
-    of_string name 
-
-  let is_global = function Var (_, Global) -> true | _ -> false
-
-  let is_temporal = function Var (_, Temporal) -> true | _ -> false
-
-  let is_local = function Var (_, Local) -> true | _ -> false 
-
-  let pp fmt = function Var (s, _) -> F.fprintf fmt "%s" s
-end
 
 module SStr = struct
   type t = Top | String of string [@@deriving compare]
@@ -128,7 +164,7 @@ module SStr = struct
     |  String s -> F.fprintf fmt "\'%s\'" s
 end
 
-module Int = struct
+module IInt = struct
   type t = Int of int | Top [@@deriving compare]
 
   let top = Top
@@ -288,54 +324,15 @@ module JFieldID = struct
   let pp fmt (JF (jc, f)) = F.fprintf fmt "%a.%s" JClass.pp jc f 
 end
 
-module Array = struct
-  include Caml.List
-
-  type t = Loc.t list [@@deriving compare]
-
-  let pp fmt arr = 
-    let rec pp_list fmt = function 
-      [] -> 
-      ()
-      | h :: [] -> 
-        F.fprintf fmt "%a" Loc.pp h
-      | h :: t -> 
-        F.fprintf fmt "%a, %a" Loc.pp h pp_list t
-    in
-    F.fprintf fmt "[%a]" pp_list arr
-end
-
-module Struct = struct
-  include PrettyPrintable.MakePPMap(String)
-
-  let pp = pp ~pp_value:Loc.pp
-end
-
-module Freezed = struct
-  type t = ArrayLookup of Loc.t * Int.t
-  [@@deriving compare]
-
-  let freeze_lookup loc index = 
-    ArrayLookup (loc, index)
-
-  let pp fmt f =
-    match f with
-    | ArrayLookup (loc, index) ->
-        F.fprintf fmt "[! %a[%a] !]" Loc.pp loc Int.pp index
-end
-
 module Val = struct
   type t = Bot
     | Top
     | Loc of Loc.t
     | Str of SStr.t
-    | Int of Int.t
-    | Struct of Loc.t Struct.t
-    | Array of Array.t
+    | Int of IInt.t
     | JClass of JClass.t
     | JMethodID of JMethodID.t
     | JFieldID of JFieldID.t
-    | Freezed of Freezed.t
     [@@deriving compare]
 
   let pp fmt = function
@@ -348,19 +345,13 @@ module Val = struct
     | Str s -> 
       F.fprintf fmt "%a" SStr.pp s
     | Int i -> 
-      F.fprintf fmt "%a" Int.pp i
-    | Struct s -> 
-      F.fprintf fmt "%a" Struct.pp s
-    | Array a -> 
-      F.fprintf fmt "%a" Array.pp a
+      F.fprintf fmt "%a" IInt.pp i
     | JClass jc -> 
       F.fprintf fmt "%a" JClass.pp jc
     | JMethodID jm -> 
       F.fprintf fmt "%a" JMethodID.pp jm
     | JFieldID jf -> 
       F.fprintf fmt "%a" JFieldID.pp jf
-    | Freezed f -> 
-      F.fprintf fmt "%a" Freezed.pp f
 
   let bot = Bot
 
@@ -372,17 +363,11 @@ module Val = struct
   
   let of_int i = Int i
 
-  let of_struct s = Struct s
-
-  let of_array a = Array a
-
   let of_jclass jc = JClass jc
 
   let of_jmethod_id jm = JMethodID jm
 
   let of_jfield_id jf = JFieldID jf
-
-  let of_freezed f = Freezed f
 
   let is_bot = function Bot -> true | _ ->false
 
@@ -394,17 +379,11 @@ module Val = struct
 
   let is_int = function Int _ -> true | _ -> false
 
-  let is_struct = function Struct _ -> true | _ -> false
-
-  let is_array = function Array _ -> true | _ -> false
-
   let is_jclass = function JClass _ -> true | _ -> false
 
   let is_jmethod_id = function JMethodID _ -> true | _ -> false
 
   let is_jfield_id  = function JFieldID _ -> true | _ -> false
-
-  let is_freezed = function Freezed _ -> true | _ -> false
 
   let to_loc = function Loc l -> l | _ as arg -> failwith (F.asprintf "Wrong type argument: %a" pp arg)
 
@@ -412,18 +391,11 @@ module Val = struct
 
   let to_int = function Int i -> i | _ -> failwith "Wrong type argument."
 
-  let to_struct = function Struct s -> s | _ as arg -> failwith (F.asprintf "Wrong type argument: %a" pp arg)
-
-  let to_array = function Array a -> a | _ -> failwith "Wrong type argument."
-
   let to_jclass = function JClass jc -> jc | _ -> failwith "Wrong type argument."
 
   let to_jmethod_id = function JMethodID jm -> jm | _ -> failwith "Wrong type argument."
 
   let to_jfield_id = function JFieldID ji -> ji | _ -> failwith "Wrong type argument."
-
-  let to_freezed = function Freezed f -> f | _ -> failwith "Wrong type argument."
-
 end
 
 module Cst = struct
@@ -465,27 +437,37 @@ module Cst = struct
 
   module Z3Encoder = struct
     module Loc2SymMap = Caml.Map.Make(Loc)
+    module Loc2IndexMap = Caml.Map.Make(Loc)
 
-    let map = ref Loc2SymMap.empty
+    let sym_map = ref Loc2SymMap.empty
+    let index_map = ref Loc2SymMap.empty
 
     let index = ref 0 
+
+    let get_index loc = 
+      match Loc2IndexMap.find_opt loc !index_map with
+      | Some i ->
+          i
+      | None ->
+          (index := !index + 1; index_map := (Loc2IndexMap.add loc !index !index_map); !index)
 
     (* TODO: Should we handle constant locations as constant integers? *)
     let new_sym : context -> Loc.t -> Expr.expr = 
       fun ctxt loc ->
         let sort = Arithmetic.Integer.mk_sort ctxt in
-        if Loc.is_const loc then
-          Expr.mk_numeral_int ctxt (Loc.get_index loc) sort
-        else 
-          (index := !index + 1; (Expr.mk_const ctxt (Symbol.mk_int ctxt !index) sort))
+        match loc with
+        | ConstLoc _ ->
+            (index := !index + 1; (Expr.mk_numeral_int ctxt (get_index loc) sort))
+        | _ ->
+            (index := !index + 1; (Expr.mk_const ctxt (Symbol.mk_int ctxt !index) sort))
 
     let find ctx loc = 
-      match Loc2SymMap.find_opt loc !map with
+      match Loc2SymMap.find_opt loc !sym_map with
       | Some s -> 
           s
       | None -> 
           (let nsym = new_sym ctx loc in
-          (map := (Loc2SymMap.add loc nsym !map); nsym))
+          (sym_map := (Loc2SymMap.add loc nsym !sym_map); nsym))
 
     let rec encode ctx = function
        True -> 
@@ -516,19 +498,14 @@ module Cst = struct
           | None -> 
             RevMap.add s l m
         in
-        Loc2SymMap.fold f !map RevMap.empty 
+        Loc2SymMap.fold f !sym_map RevMap.empty 
       in 
       let find_loc e =
-        (*if Expr.is_const e then *)
           match RevMap.find_opt e rev_map with
           | None -> 
             failwith "some constraints go wrong."
           | Some s -> 
             s
-        (* else 
-          
-          let () = L.progress "%s\n@." (Expr.to_string e) in
-          failwith "0 constraint only have loc arguments." *)
       in
       let rec impl e = 
         if Boolean.is_true e then cst_true
@@ -598,7 +575,11 @@ module AVS = struct
 end 
 
 module Env = struct
-  include PrettyPrintable.MakePPMap(Var)
+  module M = PrettyPrintable.MakePPMap(Var)
+
+  include (M : module type of M with type 'a t := 'a M.t)
+
+  type t = Loc.t M.t
 
   let find v env = 
     match find_opt v env with
@@ -628,7 +609,11 @@ module Env = struct
 end
 
 module InstEnv = struct
-  include PrettyPrintable.MakePPMap(Loc)
+  module M = PrettyPrintable.MakePPMap(Loc)
+
+  include (M: module type of M with type 'a t := 'a M.t)
+
+  type t = AVS.t M.t
 
   let find loc ienv =
     match find_opt loc ienv with
@@ -637,23 +622,47 @@ module InstEnv = struct
     | None ->
         AVS.bot
 
+  let add loc avs ienv =
+    match find_opt loc ienv with
+    | Some s ->
+        add loc (AVS.union s avs) ienv
+    | _ ->
+        add loc avs ienv
+
   let pp = pp ~pp_value: AVS.pp
 end
 
 module Heap = struct
-  include PrettyPrintable.MakePPMap(Loc) 
+  module M = PrettyPrintable.MakePPMap(Loc) 
+  module LocSet = PrettyPrintable.MakePPSet(Loc)
+
+  include (M: module type of M with type 'a t := 'a M.t)
+
+  type t = AVS.t M.t
+
+  let pp = pp ~pp_value:AVS.pp
+
+  let compare h1 h2 =
+    (fun avs1 avs2 ->
+      AVS.compare avs1 avs2)
+    |> (fun x -> compare x h1 h2)
+
+  let flatten_heap_locs heap =
+  (fun loc avs locset ->
+    let locset' = LocSet.add loc locset in
+    (fun ((value: Val.t), _) locset ->
+      match value with
+      | Loc loc ->
+          LocSet.add loc locset
+      | _ ->
+          locset)
+    |> (fun f -> AVS.fold f avs locset'))
+  |> (fun f -> fold f heap LocSet.empty)
 
   let find_offsets_of l heap =
-    let filter_offset : Loc.t -> AVS.t -> bool =
-      fun loc avs ->
-        match loc with
-        | Offset (loc, _) ->
-            loc = l
-        | _ ->
-            false
-    in
-    filter filter_offset heap
-
+    let () = L.progress "HEAP: %a\n@." pp heap in
+    (fun (loc: Loc.t) -> match loc with Offset (base, _) -> let () = L.progress "%a = %a (%b)\n@." Loc.pp loc Loc.pp l (base = l) in base = l | _ -> false)
+    |> (fun f -> LocSet.filter f (flatten_heap_locs heap))
 
   let find l heap =
     match find_opt l heap with
@@ -683,34 +692,33 @@ module Heap = struct
   let join lhs rhs = 
     union (fun key val1 val2 -> Some (AVS.join val1 val2)) lhs rhs
 
-  let pp = pp ~pp_value:AVS.pp
 end
 
 module LogUnit = struct
   type t = 
-    { ret_sym: Loc.t
+    { rloc: Loc.t
     ; jfun: JNIFun.t
     ; args: Loc.t list
-    ; heap: AVS.t Heap.t}
+    ; heap: Heap.t }
     [@@deriving compare]
 
   let get_heap l = l.heap
 
   let get_args l = l.args
 
-  let get_ret l = l.ret_sym
+  let get_rloc l = l.rloc
 
   let get_jfun l = l.jfun
 
-  let make ret_sym' jfun' args' heap' = 
-    { ret_sym = ret_sym'
+  let mk rloc' jfun' args' heap' = 
+    { rloc = rloc'
     ; jfun = jfun'
     ; args = args'
     ; heap = heap' }
 
   let update_heap heap' l = { l with heap = heap' }
 
-  let pp fmt = function {ret_sym; jfun; args; heap} -> 
+  let pp fmt = function {rloc; jfun; args; heap} -> 
     let rec pp_list fmt = function
       [] ->
         ()
@@ -719,7 +727,7 @@ module LogUnit = struct
       | h :: t ->
         F.fprintf fmt "%a, %a" Loc.pp h pp_list t
     in
-    F.fprintf fmt "{%a; %a; %a; %a}" Loc.pp ret_sym JNIFun.pp jfun pp_list args Heap.pp heap
+    F.fprintf fmt "{%a; %a; %a; %a}" Loc.pp rloc JNIFun.pp jfun pp_list args Heap.pp heap
 end
 
 module CallLogs = struct
@@ -732,8 +740,8 @@ end
 
 module Domain = struct
   type t = 
-    { env: Loc.t Env.t
-    ; heap: AVS.t Heap.t
+    { env: Env.t
+    ; heap: Heap.t
     ; logs: CallLogs.t }
 
   let empty = 

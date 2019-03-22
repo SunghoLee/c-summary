@@ -5,20 +5,22 @@ module L = Logging
 module Domain = SemanticSummaryDomain
 open Domain
 open Pervasives
+open SUtils
 
-let get_struct_fields: Loc.t Struct.t -> string list =
-  fun str ->
-    Struct.fold (fun field _ res -> field :: res) str []
+          
 
-let get_struct typ tenv =
-  match Typ.name typ with
+let get_struct name tenv =
+  match Tenv.lookup tenv name with
   | Some s -> 
-    (match Tenv.lookup tenv s with
-    | Some s -> 
-        s
-    | None -> 
-        failwith ("The structure cannot be found in a type environment: " ^ (Typ.to_string typ)))
-  | _ -> failwith ("this typ is not a struct type: " ^ (Typ.to_string typ))
+      s
+  | None -> 
+      failwith ("The structure cannot be found in a type environment: " ^ (Typ.Name.to_string name))
+
+let get_fld_and_typs name tenv = 
+  get_struct name tenv
+  |> (fun x -> x.Typ.Struct.fields @ x.Typ.Struct.statics)
+  |> ((fun pairs (n, ftyp, _) -> (Typ.Fieldname.to_string n, ftyp) :: pairs) 
+    |> (fun f -> Caml.List.fold_left f []))
 
 let find_field_typ: String.t -> Typ.Struct.fields -> Typ.t = 
   fun name fields ->
@@ -41,19 +43,6 @@ let ( ^ ) avs cst =
   {(v11, cst11) ... (v1n, cst1n), (v21, cst21) ... (v2m, cst2m)}*)
 let ( + ) lhs rhs = AVS.union lhs rhs
 
-(* {(l1, cst1) ... (ln, cstn)} = {(h(l1) ^ cst1) ... (h(ln) ^ cstn)} *)
-let indirect_load avs heap =
-  (fun ((value: Val.t), cst) avs ->
-    match value with
-    | Loc loc -> 
-        Heap.find loc heap
-        |> (fun x -> x ^ cst)
-    | Int (Int i) when i = 0 -> 
-        let () = L.progress "propagate NULL!" in
-        avs
-  )
-  |> (fun x -> AVS.fold x avs AVS.empty)
-
 (* Cartesian product *)
 let ( * ) x y =
   Caml.List.concat (Caml.List.map (fun x -> Caml.List.map (fun y -> x, y) (AVS.elements y)) (AVS.elements x))
@@ -63,8 +52,23 @@ let load avs heap =
   let f = fun (value, cst) avs ->
     let loc = Val.to_loc value in
     let avs' = Heap.find loc heap in
-    let avs'' = avs' ^ cst in
-    avs'' + avs
+    let avs'' =  (* special handling for array: *array = array[0] *)
+      (match loc with
+      | Offset (base, (I 0)) | Offset (base, IndexTop) ->
+          (match Heap.find_opt base heap with
+          | Some s ->
+              avs' + s
+          | None ->
+              avs')
+      | _ -> 
+          (match Heap.find_opt (Loc.mk_offset loc (Loc.mk_index_of_int 0)) heap with
+          | Some s ->
+              avs' + s
+          | None ->
+              avs'))
+    in
+    let avs''' = avs'' ^ cst in
+    avs''' + avs
   in
   AVS.fold f avs AVS.empty
 

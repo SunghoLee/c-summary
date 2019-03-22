@@ -54,37 +54,17 @@ let opt_heap heap locs =
   let f_heap_closure = fun locset loc ->
     let rec f_avs_closure: ValCst.t -> LocSet.t -> LocSet.t  = 
       fun (value, _) locset ->
-        let offset_closure = fun loc locset ->
-          Heap.find_offsets_of loc heap'
-          |> (fun x -> Heap.fold (fun l avs locset ->
-              LocSet.add l locset
-              |> AVS.fold f_avs_closure avs) x locset)
-        in
         match value with
         | Loc loc ->
             let locset' = 
               LocSet.add loc locset
-              |> offset_closure loc 
+              |> LocSet.union (Heap.find_offsets_of loc heap') 
             in
             (match Heap.find_opt loc heap' with
             | Some avs -> 
                 AVS.fold f_avs_closure avs locset'
             | None ->
                 locset')
-        | Struct str ->
-            let str = Val.to_struct value in
-            let f_fields = fun field loc locset ->
-              let locset' = 
-                LocSet.add loc locset 
-                |> offset_closure loc
-              in
-              (match Heap.find_opt loc heap' with
-              | Some avs ->
-                  AVS.fold f_avs_closure avs locset'
-              | None ->
-                  locset')
-            in
-            Struct.fold f_fields str locset
         | _ -> 
             locset
     in

@@ -167,7 +167,7 @@ let mk_ldg logs =
   in
   let connect_edges = fun node ->
     let log = get_logunit node in
-    let ret = log.LogUnit.ret_sym in
+    let ret = log.LogUnit.rloc in
     let iter_node = fun node' ->
       if is_in_heap ret node' then
         let _ = Node.(node => node') in

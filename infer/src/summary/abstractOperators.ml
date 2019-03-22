@@ -1,59 +1,59 @@
 open SemanticSummaryDomain
 open Pervasives
 
-let unop_sem_fun : Unop.t -> (Int.t -> Int.t) =
+let unop_sem_fun : Unop.t -> (IInt.t -> IInt.t) =
   fun op ->
     match op with
     | Neg ->
-        Int.( * ) (Int.of_int (-1))
+        IInt.( * ) (IInt.of_int (-1))
     | BNot ->
         (* does not support *)
-        (fun x -> Int.top)
+        (fun x -> IInt.top)
     | LNot ->
         (* does not supprot *)
-        (fun x -> Int.top)
+        (fun x -> IInt.top)
 
-let binop_sem_fun : Binop.t -> (Int.t -> Int.t -> Int.t) =
+let binop_sem_fun : Binop.t -> (IInt.t -> IInt.t -> IInt.t) =
   fun op ->
     match op with
     | PlusPI | MinusPI | MinusPP ->
         failwith "Does not support arithmetic operations for pointer."
     | PlusA opt ->
-        Int.(+)
+        IInt.(+)
     | MinusA opt ->
-        Int.(-)
+        IInt.(-)
     | Mult opt (** * *) ->
-        Int.( * )
+        IInt.( * )
     | Div (** / *) ->
-        Int.(/)
+        IInt.(/)
     | Mod (** % *) ->
-        Int.(%)
+        IInt.(%)
     | Shiftlt (** shift left *) -> 
-        Int.(<<)
+        IInt.(<<)
     | Shiftrt (** shift right *) ->
-        Int.(>>)
+        IInt.(>>)
     | Lt (** <  (arithmetic comparison) *) ->
-        Int.(<)
+        IInt.(<)
     | Gt (** >  (arithmetic comparison) *) ->
-        Int.(>)
+        IInt.(>)
     | Le (** <= (arithmetic comparison) *) ->
-        Int.(<=)
+        IInt.(<=)
     | Ge (** >= (arithmetic comparison) *) ->
-        Int.(>=)
+        IInt.(>=)
     | Eq (** == (arithmetic comparison) *) ->
-        Int.(=)
+        IInt.(=)
     | Ne (** != (arithmetic comparison) *) ->
-        Int.(!=)
+        IInt.(!=)
     | BAnd (** bitwise and *) ->
-        Int.(&)
+        IInt.(&)
     | BXor (** exclusive-or *) ->
-        Int.b_xor
+        IInt.b_xor
     | BOr (** inclusive-or *) ->
-        Int.b_or
+        IInt.b_or
     | LAnd (** logical and. Does not always evaluate both operands. *) ->
-        Int.l_and
+        IInt.l_and
     | LOr (** logical or. Does not always evaluate both operands. *) ->
-        Int.l_or
+        IInt.l_or
 
 let binop op lhs rhs =
   let iter_lhs : Val.t * Cst.t -> AVS.t -> AVS.t =
