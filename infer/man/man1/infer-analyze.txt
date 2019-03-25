@@ -307,6 +307,22 @@ OPTIONS
            Timeout for SQLite results database operations, in milliseconds.
            (default: five seconds times number of cores)
 
+       --ss
+           Activates: preanalysis for semantic summary generation
+           (Conversely: --no-ss)
+
+       --ss-only
+           Activates: Enable --ss and disable all other checkers (Conversely:
+           --no-ss-only)
+
+       --ssp
+           Activates: c/c++ semantic summary generation (Conversely:
+           --no-ssp)
+
+       --ssp-only
+           Activates: Enable --ssp and disable all other checkers
+           (Conversely: --no-ssp-only)
+
        --starvation
            Activates: starvation analysis (Conversely: --no-starvation)
 

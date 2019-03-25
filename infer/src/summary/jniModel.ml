@@ -7,6 +7,10 @@ let skip_prefixs =
   [ "_JNIEnv_"
   ; "JavaVM" ]
 
+let jni_struct = 
+  [ "android_app"
+  ; "JNIEnv" ]
+
 let jni_obj_typ = 
   [ "_jobject"
   ; "_jclass"
@@ -37,5 +41,12 @@ let is_jni_obj_typ typ =
   match Typ.name typ with
   | Some s ->
       Caml.List.mem (Typ.Name.name s) jni_obj_typ  
+  | None ->
+      false
+
+let is_jni_struct typ =
+  match Typ.name typ with
+  | Some s ->
+      Caml.List.mem (Typ.Name.name s) jni_struct
   | None ->
       false

@@ -849,6 +849,22 @@ OPTIONS
            Timeout for SQLite results database operations, in milliseconds.
            (default: five seconds times number of cores)           See also infer-analyze(1), infer-capture(1), and infer-run(1).
 
+       --ss
+           Activates: preanalysis for semantic summary generation
+           (Conversely: --no-ss)           See also infer-analyze(1).
+
+       --ss-only
+           Activates: Enable --ss and disable all other checkers (Conversely:
+           --no-ss-only)           See also infer-analyze(1).
+
+       --ssp
+           Activates: c/c++ semantic summary generation (Conversely:
+           --no-ssp)           See also infer-analyze(1).
+
+       --ssp-only
+           Activates: Enable --ssp and disable all other checkers
+           (Conversely: --no-ssp-only)           See also infer-analyze(1).
+
        --stacktrace file
            File path containing a json-encoded Java crash stacktrace. Used to
            guide the analysis (only with '-a crashcontext'). See

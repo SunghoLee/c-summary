@@ -98,7 +98,8 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
           else
             Caml.List.fold_left (fun i (e, t) -> exec_expr i e t true) astate args
       | Call ((id, typ_e1), _, args, loc, flag) -> 
-          failwith "C does not support this!"
+          astate
+          (* failwith "C does not support this!" *)
       | Nullify (pid, loc) -> astate
       | Abstract loc -> astate
       | ExitScope (id_list, loc) -> astate

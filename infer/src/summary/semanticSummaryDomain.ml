@@ -660,8 +660,7 @@ module Heap = struct
   |> (fun f -> fold f heap LocSet.empty)
 
   let find_offsets_of l heap =
-    let () = L.progress "HEAP: %a\n@." pp heap in
-    (fun (loc: Loc.t) -> match loc with Offset (base, _) -> let () = L.progress "%a = %a (%b)\n@." Loc.pp loc Loc.pp l (base = l) in base = l | _ -> false)
+    (fun (loc: Loc.t) -> match loc with Offset (base, _) -> base = l | _ -> false)
     |> (fun f -> LocSet.filter f (flatten_heap_locs heap))
 
   let find l heap =
@@ -784,9 +783,6 @@ module Domain = struct
 
   let pp fmt { env; heap; logs } =
     F.fprintf fmt "===\n%a\n%a\n%a\n===" Env.pp env Heap.pp heap CallLogs.pp logs
-
-  let pp_summary fmt (pre, post) = 
-    F.fprintf fmt "%a\n%a" pp pre pp post
 end
 
 include Domain

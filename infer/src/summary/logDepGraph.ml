@@ -220,10 +220,11 @@ module DotPrinter = struct
       type t = int * string
 
       let mk_label index desc = 
-        let rep = Str.global_replace (Str.regexp_string "{") "\{" desc in
-        let rep' = Str.global_replace (Str.regexp_string "}") "\}" rep in
-        let rep'' = Str.global_replace (Str.regexp_string ">") "\>" rep' in
-        index, rep''
+        Str.global_replace (Str.regexp_string "{") "\{" desc
+        |> Str.global_replace (Str.regexp_string "}") "\}"
+        |> Str.global_replace (Str.regexp_string ">") "\>"
+        |> Str.global_replace (Str.regexp_string "<") "\<"
+        |> (fun x -> index, x)
 
       let pp fmt (index, desc) = 
         F.fprintf fmt "%d [label=\"%s\"]" index desc

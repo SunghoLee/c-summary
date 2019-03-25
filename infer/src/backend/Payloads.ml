@@ -20,7 +20,7 @@ type t =
   ; purity: PurityDomain.summary option
   ; quandary: QuandarySummary.t option
   ; racerd: RacerDDomain.summary option
-  ; semantic_summary: (SemanticSummaryDomain.t * SemanticSummaryDomain.t) option
+  ; semantic_summary: SemanticSummaryDomain.t option
   ; siof: SiofDomain.Summary.t option
   ; starvation: StarvationDomain.summary option
   ; typestate: TypeState.t option
@@ -62,7 +62,7 @@ let pp pe fmt
     siof
     (pp_opt "RacerD" RacerDDomain.pp_summary)
     racerd (pp_opt "Litho" LithoDomain.pp) litho
-    (pp_opt "SemanticSummary" SemanticSummaryDomain.pp_summary)
+    (pp_opt "SemanticSummary" SemanticSummaryDomain.pp)
     semantic_summary 
     (pp_opt "BufferOverrun" BufferOverrunSummary.pp)
     buffer_overrun
