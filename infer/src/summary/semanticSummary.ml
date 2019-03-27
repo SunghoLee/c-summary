@@ -86,7 +86,7 @@ module TransferFunctions = struct
 
   let mk_domain env heap logs = 
     if opt_heap_every_stmt then
-      Domain.make env (Optimizer.opt_cst_in_heap heap) logs
+      Domain.make env (Heap.opt_cst_in_heap heap) logs
     else
       Domain.make env heap logs
 
@@ -137,7 +137,7 @@ module TransferFunctions = struct
           | Cfun _ ->
               AVS.bot, heap
           | Cstr s -> 
-              let nloc = Loc.mk_dyn () in
+              let nloc = Loc.mk_dyn s in
               let str = SStr.of_string s in
               let heap' = Heap.add nloc (AVS.singleton (Val.of_str str, Cst.cst_true)) heap in
               AVS.singleton (Val.of_loc nloc, Cst.cst_true), heap'
@@ -247,10 +247,11 @@ module TransferFunctions = struct
           let heap''' = Helper.store lhs_avs rhs_avs heap'' in
           mk_domain env heap''' logs
       | Store (e1 , typ, e2, loc) -> 
-          (* let () = L.progress "Domain:%a\n@." Domain.pp (mk_domain env heap logs) in *)
+          let () = L.progress "Domain:%a\n@." Domain.pp (mk_domain env heap logs) in
           let lhs_avs, heap' = exec_expr scope env heap e1 in
           let rhs_avs, heap'' = exec_expr scope env heap' e2 in
           let heap''' = Helper.store lhs_avs rhs_avs heap'' in
+          let () = L.progress "AFTER:%a\n@." Heap.pp heap''' in
           mk_domain env heap''' logs
       | Prune (e, loc, b, i) -> (* do not support heap pruning *)
           {env; heap; logs}
@@ -263,14 +264,19 @@ module TransferFunctions = struct
               Env.add lhs_var (Loc.mk_const lhs_var) env
           in
           let lhs_loc = Env.find lhs_var env' in
-          let ret_loc = Loc.mk_dyn () in
+          let ret_loc = Loc.mk_dyn (Location.to_string loc) in
           let ret_loc_ptr = Loc.mk_pointer ret_loc in
           let heap' = Heap.add lhs_loc (AVS.singleton (Val.of_loc ret_loc, Cst.cst_true)) heap in
           let heap'' = Heap.add ret_loc (AVS.singleton (Val.of_loc ret_loc_ptr, Cst.cst_true)) heap' in
           let jnifun = JNIFun.of_procname callee_pname in
+          let arg_index = ref (Caml.List.length args) in
           let dumped_heap, arg_locs = 
             (fun (arg_expr, _) (dumped_heap, arg_locs) ->
-              let arg_loc = Loc.mk_dyn () in
+              let () = (arg_index := !arg_index - 1) in
+              let arg_loc = 
+                (Location.to_string loc) ^ ":arg_" ^ (string_of_int !arg_index) 
+                |> Loc.mk_dyn
+              in
               let arg_avs, heap' = exec_expr scope env' dumped_heap arg_expr in
               (Heap.add arg_loc arg_avs heap', arg_loc :: arg_locs))
             |> (fun f -> Caml.List.fold_right f args (heap'', []))
@@ -351,7 +357,9 @@ module TransferFunctions = struct
               let () = L.progress "Not existing callee. Just ignore this call.\n@." in
               {env; heap; logs})
       | Call _ ->
-          failwith "This statement is not supported in C/C++!"
+          let () = L.progress "Not support function pointers\n@." in
+          {env; heap; logs}
+            (*failwith "This statement is not supported in C/C++!" *)
       | Nullify (pid, loc) -> 
           {env; heap; logs}
       | Abstract loc -> 
@@ -580,21 +588,22 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         let proc_data = ProcData.make_default proc_desc tenv in 
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
-                let opt_astate = Optimizer.optimize p (Typ.Procname.to_string proc_name) in
-        let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
-        let summ' = {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some opt_astate}; Summary.proc_desc = proc_desc; Summary.sessions = ref session} in
-        Summary.store summ'; 
-        (if JniModel.is_java_native proc_name then
-          let ldg = LogDepGraph.mk_ldg opt_astate.logs in
-          let dot_graph = LogDepGraph.DotPrinter.DotGraph.to_dot_graph ldg in
-          let graph_str = F.asprintf "%a" LogDepGraph.DotPrinter.DotGraph.pp dot_graph in
-          let oc = open_out ((Typ.Procname.to_string proc_name) ^ ".out") in
-          let () = Printf.fprintf oc "%s" graph_str in
-          close_out oc
-        );
-        L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
-        summ'
-        | None -> summary
+          let opt_astate = Domain.optimize p ~f_name:(Typ.Procname.to_string proc_name) in
+          let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
+          let summ' = {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some opt_astate}; Summary.proc_desc = proc_desc; Summary.sessions = ref session} in
+          Summary.store summ'; 
+          (if JniModel.is_java_native proc_name then
+            let ldg = LogDepGraph.mk_ldg opt_astate.logs in
+            let dot_graph = LogDepGraph.DotPrinter.DotGraph.to_dot_graph ldg in
+            let graph_str = F.asprintf "%a" LogDepGraph.DotPrinter.DotGraph.pp dot_graph in
+            let oc = open_out ((Typ.Procname.to_string proc_name) ^ ".out") in
+            let () = Printf.fprintf oc "%s" graph_str in
+            close_out oc
+          );
+          L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
+          summ'
+        | None -> 
+            summary
     )
     else 
         (L.progress "Skiping analysis for a JNI function %s\n@." (Typ.Procname.to_string proc_name); summary)

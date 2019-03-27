@@ -41,75 +41,78 @@ let rec mk_ienv_param_loc: Tenv.t -> Loc.t -> Typ.t -> Heap.t -> Heap.t -> InstE
               |> (fun f -> AVS.fold f ins_avs ienv)))
         |> (fun f -> LocSet.fold f offsets ienv)
       in
-      match typ.desc, loc with
-      | Tptr (typ', _), ConstLoc _ -> (* [*l | l ] : t*, where l is a constant location in the callee environment. *)
-
-          mk_ienv_param_loc tenv (Loc.mk_pointer loc) typ' callee caller ienv
-      | Tptr (typ', _), Pointer loc' ->
-          let ins_avs = InstEnv.find loc' ienv in
-          (fun ((value: Val.t), cst) ienv ->
-            (match value with
-            | Loc ins_loc ->
-                InstEnv.add loc (Heap.find ins_loc caller) ienv
-                |> mk_ienv_param_loc tenv (Loc.mk_pointer loc) typ' callee caller
-            | _ -> failwith "value must be a location."))
-          |> (fun f -> AVS.fold f ins_avs ienv)
-      | Tptr (typ', _), Offset (loc', index) ->
-          failwith "struct cannot be propagated as a constant location."
-      | Tstruct _, ConstLoc _ when not (JniModel.is_jni_obj_typ typ) -> (* [*l | l] : struct t *)
-          failwith "struct cannot be propagated as a constant location."
-      | Tstruct name, Pointer loc' when not (JniModel.is_jni_obj_typ typ) -> (* *l : struct t *)
-          let ins_avs = InstEnv.find loc' ienv in
-          let iter_avs = fun ((value: Val.t), cst) ienv ->
-            (match value with
-            | Loc ins_loc ->
-                let ienv' = InstEnv.add loc (Heap.find ins_loc caller) ienv in
-                let fld_typs = Helper.get_fld_and_typs name tenv in
-                let ienv'' = (fun (fld, typ) ienv ->
-                  let index = Loc.mk_index_of_string fld in
-                  let ins_avs = InstEnv.find loc ienv in
-                  (fun ((value: Val.t), cst) ienv ->
-                    (match value with
-                    | Loc ins_loc ->
-                        let ins_offset = Loc.mk_offset ins_loc index in
-                        let param_offset = Loc.mk_offset loc index in
-                        InstEnv.add param_offset (AVS.singleton (Val.of_loc ins_offset, cst)) ienv
-                    | _ -> failwith "value must be a location."))
-                  |> (fun f -> AVS.fold f ins_avs ienv))
-                |> (fun f -> Caml.List.fold_right f fld_typs ienv')
-                in
-                (fun (fld, typ) ienv ->
-                  let param_offset = Loc.mk_offset loc (Loc.mk_index_of_string fld) in
-                  mk_ienv_param_loc tenv (Loc.mk_pointer param_offset) typ callee caller ienv)
-                |> (fun f -> Caml.List.fold_right f fld_typs ienv'')
-            | _ -> 
-                failwith "value must be a location.")
-          in
-          AVS.fold iter_avs ins_avs ienv
-      | Tstruct name, Offset (loc', index) ->
-          failwith "struct cannot be propagated as a constant location."
-      | Tarray _, ConstLoc _ ->
-          failwith "struct cannot be propagated as a constant location."
-      | Tarray _, Pointer loc' ->
-          failwith "struct cannot be propagated as a constant location."
-      | Tarray _, Offset (loc', index) ->
-          failwith "struct cannot be propagated as a constant location."
-      | _, ConstLoc _ -> (* l : t *)
-          failwith "struct cannot be propagated as a constant location."
-      | _, Pointer loc' -> (* *l : t *)
-          let ins_avs = InstEnv.find loc' ienv in
-          (fun ((value: Val.t), cst) ienv ->
-            (match value with
-            | Loc ins_loc ->
-                let caller_avs = Heap.find ins_loc caller in
-                (InstEnv.add loc caller_avs ienv)
-                |> expand_offset loc caller_avs typ
-            | _ -> failwith "value must be a location."))
-          |> (fun f -> AVS.fold f ins_avs ienv)
-      | _, Offset (loc', index) ->
-          failwith "does not handle this case!"
-      | _ -> 
-          failwith "does not handle this case!"
+      if JniModel.is_jni_struct typ then
+        ienv
+      else
+        match typ.desc, loc with
+        | Tptr (typ', _), ConstLoc _ -> (* [*l | l ] : t*, where l is a constant location in the callee environment. *)
+            mk_ienv_param_loc tenv (Loc.mk_pointer loc) typ' callee caller ienv
+        | Tptr (typ', _), Pointer loc' ->
+            let ins_avs = InstEnv.find loc' ienv in
+            (fun ((value: Val.t), cst) ienv ->
+              (match value with
+              | Loc ins_loc ->
+                  InstEnv.add loc (Heap.find ins_loc caller) ienv
+                  |> mk_ienv_param_loc tenv (Loc.mk_pointer loc) typ' callee caller
+              | _ -> failwith "value must be a location."))
+            |> (fun f -> AVS.fold f ins_avs ienv)
+        | Tptr (typ', _), Offset (loc', index) ->
+            failwith "struct cannot be propagated as a constant location."
+        | Tstruct _, ConstLoc _ when not (JniModel.is_jni_obj_typ typ) -> (* [*l | l] : struct t *)
+            failwith "struct cannot be propagated as a constant location."
+        | Tstruct name, Pointer loc' when not (JniModel.is_jni_obj_typ typ) -> (* *l : struct t *)
+            let ins_avs = InstEnv.find loc' ienv in
+            let iter_avs = fun ((value: Val.t), cst) ienv ->
+              (match value with
+              | Loc ins_loc ->
+                  let ienv' = InstEnv.add loc (Heap.find ins_loc caller) ienv in
+                  let fld_typs = Helper.get_fld_and_typs name tenv in
+                  let ienv'' = (fun (fld, typ) ienv ->
+                    let index = Loc.mk_index_of_string fld in
+                    let ins_avs = InstEnv.find loc ienv in
+                    (fun ((value: Val.t), cst) ienv ->
+                      (match value with
+                      | Loc ins_loc ->
+                          let ins_offset = Loc.mk_offset ins_loc index in
+                          let param_offset = Loc.mk_offset loc index in
+                          InstEnv.add param_offset (AVS.singleton (Val.of_loc ins_offset, cst)) ienv
+                      | _ -> failwith "value must be a location."))
+                    |> (fun f -> AVS.fold f ins_avs ienv))
+                  |> (fun f -> Caml.List.fold_right f fld_typs ienv')
+                  in
+                  (fun (fld, typ) ienv ->
+                    let param_offset = Loc.mk_offset loc (Loc.mk_index_of_string fld) in
+                    mk_ienv_param_loc tenv (Loc.mk_pointer param_offset) typ callee caller ienv)
+                  |> (fun f -> Caml.List.fold_right f fld_typs ienv'')
+              | _ -> 
+                  failwith "value must be a location.")
+            in
+            AVS.fold iter_avs ins_avs ienv
+        | Tstruct name, Offset (loc', index) ->
+            failwith "struct cannot be propagated as a constant location."
+        | Tarray _, ConstLoc _ ->
+            failwith "struct cannot be propagated as a constant location."
+        | Tarray _, Pointer loc' ->
+            let () = L.progress "Typ: %a, Loc: %a\n@." (Typ.pp_full Pp.text) typ Loc.pp loc in
+            failwith "struct cannot be propagated as a constant location."
+        | Tarray _, Offset (loc', index) ->
+            failwith "struct cannot be propagated as a constant location."
+        | _, ConstLoc _ -> (* l : t *)
+            failwith "struct cannot be propagated as a constant location."
+        | _, Pointer loc' -> (* *l : t *)
+            let ins_avs = InstEnv.find loc' ienv in
+            (fun ((value: Val.t), cst) ienv ->
+              (match value with
+              | Loc ins_loc ->
+                  let caller_avs = Heap.find ins_loc caller in
+                  (InstEnv.add loc caller_avs ienv)
+                  |> expand_offset loc caller_avs typ
+              | _ -> failwith "value must be a location."))
+            |> (fun f -> AVS.fold f ins_avs ienv)
+        | _, Offset (loc', index) ->
+            failwith "does not handle this case!"
+        | _ -> 
+            failwith "does not handle this case!"
 
 let rec mk_ienv_loc: Tenv.t -> Loc.t -> Typ.t -> Heap.t -> Heap.t -> InstEnv.t -> InstEnv.t =
     fun tenv loc typ callee_heap caller_heap ienv ->

@@ -11,6 +11,8 @@ open Pervasives
 module F = Format
 module L = Logging
 
+let widen_iter = 5
+
 module Var = struct
   type t = {name: string; proc: var_scope; kind: var_kind}
   [@@deriving compare]
@@ -23,7 +25,7 @@ module Var = struct
   let mk_scope s = Proc s
 
   let of_string ?(proc=GB) s =
-    if String.is_prefix s "#GB" then
+    if String.is_prefix s ~prefix:"#GB" then
       {name = s; proc = proc; kind = Global}
     else if String.contains s '$' then
       {name = s; proc = proc; kind = Temp}
@@ -76,7 +78,7 @@ module Loc = struct
   type t = Bot
   | Top
   | ConstLoc of Var.t
-  | DynLoc of int
+  | DynLoc of string
   | Pointer of t
   | Offset of t * index
   | Ret of string
@@ -87,8 +89,6 @@ module Loc = struct
   | F of string
   | E of t
   [@@deriving compare]
-
-  let dyn_num = ref 0
 
   let bot = Bot
 
@@ -114,7 +114,7 @@ module Loc = struct
 
   let mk_const v = ConstLoc v
 
-  let mk_dyn () = (dyn_num := !dyn_num + 1; DynLoc !dyn_num)
+  let mk_dyn s = DynLoc s
 
   let mk_pointer i = Pointer i
 
@@ -136,7 +136,7 @@ module Loc = struct
     Bot -> F.fprintf fmt "bot"
     | Top -> F.fprintf fmt "top"
     | ConstLoc i -> F.fprintf fmt "CL#%a(%a)" Var.pp i Var.pp_var_scope i
-    | DynLoc i -> F.fprintf fmt "DL#%d" i
+    | DynLoc i -> F.fprintf fmt "DL#%s" i
     | Pointer p -> F.fprintf fmt "*( %a )" pp p
     | Offset (l, i) -> F.fprintf fmt "%a@%a" pp l pp_index i
     | Ret s -> F.fprintf fmt "Ret#%s" s
@@ -147,9 +147,11 @@ module Loc = struct
     | E l -> pp fmt l
 
   let to_string i = F.asprintf "%a" pp i
-
 end
 
+module LocSet = struct 
+  include PrettyPrintable.MakePPSet(Loc)
+end
 
 module SStr = struct
   type t = Top | String of string [@@deriving compare]
@@ -543,6 +545,26 @@ module Cst = struct
       in
       impl e 
   end 
+
+  module SMTSolver = struct
+    let ctx = 
+      let cfg = [("model", "true")] in
+      mk_context cfg
+
+    let is_sat cst = 
+      let expr = Z3Encoder.encode ctx cst in
+      let sim_expr = Expr.simplify expr None in
+      let sim_cst = Z3Encoder.decode sim_expr in
+      let solver = Solver.mk_solver ctx None in
+      let res = Solver.check solver [sim_expr] in
+      match res with
+      | UNSATISFIABLE -> 
+        (false, sim_cst)
+      | UNKNOWN -> 
+        (true, sim_cst)
+      | _ -> 
+        (true, sim_cst)
+  end 
 end
 
 module ValCst = struct
@@ -565,13 +587,37 @@ module AVS = struct
   (* partial order of AbstractValueSet *)
   let ( <= ) = subset
 
+  let ( < ) lhs rhs = (lhs <= rhs) && (lhs <> rhs)
+
   let join = union
+
+  let widen ~prev ~next =
+    if prev < next then (* value size is increasing *)
+      if for_all (fun (value, cst) -> Val.is_int value) next then (* all values are integers *)
+        add (Val.of_int IInt.top, Cst.cst_true) empty
+      else if for_all (fun (value, cst) -> Val.is_loc value) next then (* all values are locations *)
+        add (Val.of_loc Loc.top, Cst.cst_true) empty
+      else if for_all (fun (value, cst) -> Val.is_str value) next then (* all values are strings *)
+        add (Val.of_str SStr.top, Cst.cst_true) empty
+      else (* others *)
+        add (Val.top, Cst.cst_true) empty
+    else
+      join prev next
 
   let pp fmt avs = 
     if is_empty avs then 
       F.fprintf fmt "Bot"
     else
       pp fmt avs
+
+  let optimize avs = 
+    (fun (value, cst) avs -> 
+      match Cst.SMTSolver.is_sat cst with
+      | true, cst' ->
+          add (value, cst') avs
+      | _ ->
+          avs)
+    |> (fun f -> fold f avs empty)
 end 
 
 module Env = struct
@@ -580,6 +626,7 @@ module Env = struct
   include (M : module type of M with type 'a t := 'a M.t)
 
   type t = Loc.t M.t
+  [@@deriving compare]
 
   let find v env = 
     match find_opt v env with
@@ -604,6 +651,13 @@ module Env = struct
       else failwith "A variable cannot have multiple addresses."
     in
     union f lhs rhs
+
+  let widen ~prev ~next =
+    (* Environment does not need to be widen *)
+    if (compare prev next) <> 0 then
+      failwith "Cannot be widen two different environments."
+    else
+      next
 
   let pp = pp ~pp_value:Loc.pp
 end
@@ -673,8 +727,10 @@ module Heap = struct
   let ( <= ) lhs rhs =
     let f = fun key val1 ->
       match find_opt key rhs with
-      | Some val2 -> (val1 <= val2)
-      | None -> false
+      | Some val2 -> 
+          AVS.(val1 <= val2)
+      | None -> 
+          false
     in
     for_all f lhs
 
@@ -688,8 +744,58 @@ module Heap = struct
   let disjoint_union heap1 heap2 =
     union (fun _ _ _ -> failwith "Heaps are not disjoint!") heap1 heap2
 
+  let opt_cst_in_heap heap =
+    let opt_avs_heap = fun loc avs heap ->
+      let avs' = AVS.optimize avs in
+      if AVS.is_empty avs' then
+        heap
+      else
+        add loc avs' heap
+    in
+    fold opt_avs_heap heap empty
+
+  let optimize heap locs = 
+    let heap' = opt_cst_in_heap heap in
+    let f_heap_closure = fun locset loc ->
+      let rec f_avs_closure: ValCst.t -> LocSet.t -> LocSet.t  = 
+        fun (value, _) locset ->
+          match value with
+          | Loc loc ->
+              let locset' = 
+                LocSet.add loc locset
+                |> LocSet.union (find_offsets_of loc heap') 
+              in
+              (match find_opt loc heap' with
+              | Some avs -> 
+                  AVS.fold f_avs_closure avs locset'
+              | None ->
+                  locset')
+          | _ -> 
+              locset
+      in
+      let locset' = LocSet.add loc locset in
+      match find_opt loc heap' with
+      | Some avs -> 
+          AVS.fold f_avs_closure avs locset'
+      | None ->
+          locset'
+    in
+    let loc_closure = Caml.List.fold_left f_heap_closure LocSet.empty locs in
+    filter (fun loc _ -> LocSet.mem loc loc_closure) heap'
+
   let join lhs rhs = 
-    union (fun key val1 val2 -> Some (AVS.join val1 val2)) lhs rhs
+    let lhs' = opt_cst_in_heap lhs in
+    let rhs' = opt_cst_in_heap rhs in
+    union (fun key val1 val2 -> Some (AVS.join val1 val2)) lhs' rhs'
+
+  let widen ~prev ~next =
+    (fun loc prev_v_opt next_v_opt ->
+      match prev_v_opt, next_v_opt with
+      | None, _ | _, None ->
+          failwith "Cannot be widen: two heaps have different locations."
+      | Some prev_v, Some next_v ->
+          Some (AVS.widen ~prev:prev_v ~next:next_v))
+    |> (fun f -> merge f prev next)
 
 end
 
@@ -734,7 +840,24 @@ module CallLogs = struct
 
   let ( <= ) = subset
 
+  let ( < ) lhs rhs = (lhs <= rhs) && (lhs <> rhs)
+
   let join = union
+
+  let optimize logs = 
+    let opt_unit u = 
+      let args = LogUnit.get_args u in
+      let heap = LogUnit.get_heap u in
+      { u with LogUnit.heap = (Heap.optimize heap args) }
+    in
+    map opt_unit logs
+
+  let widen ~prev ~next =
+    if prev < next then (* log size is increasing *)
+      failwith "we hope that logs are not increased in a loop."
+    else
+      join prev next
+
 end
 
 module Domain = struct
@@ -770,16 +893,40 @@ module Domain = struct
   let update_logs logs' s = { s with logs = logs' }
 
   let ( <= ) ~lhs ~rhs = 
-    ( lhs.env <= rhs.env ) 
-    && ( lhs.heap <= rhs.heap ) 
-    && ( lhs.logs <= rhs.logs )
+    Env.( lhs.env <= rhs.env ) 
+    && Heap.( lhs.heap <= rhs.heap ) 
+    && CallLogs.( lhs.logs <= rhs.logs )
 
   let join lhs rhs = 
     { env = ( Env.join lhs.env rhs.env )
     ; heap = ( Heap.join lhs.heap rhs.heap )
     ; logs = ( CallLogs.join lhs.logs rhs.logs ) }
 
-  let widen ~prev ~next ~num_iters = join prev next
+  let widen ~prev ~next ~num_iters = 
+    if num_iters >= widen_iter then
+      (* TODO: need to widen for loop statements *)
+      let () = L.progress "\t\t\ ### WIDENING(%d)!! ### \n@." num_iters in 
+      { env = Env.widen ~prev:prev.env ~next:next.env
+      ; heap = Heap.widen ~prev:prev.heap ~next:next.heap
+      ; logs = CallLogs.widen ~prev:prev.logs ~next:next.logs }
+    else 
+      join prev next 
+
+  let rm_redundant ?f_name {env; heap; logs} = 
+    let env' = Env.filter (fun v _ -> not (Var.is_temporal v)) env in
+    let non_temp_locs = (
+      match f_name with
+      | Some f -> 
+          Env.fold (fun _ loc loclist -> loc :: loclist) env' [Loc.mk_ret f]
+      | None ->
+          Env.fold (fun _ loc loclist -> loc :: loclist) env' [])
+    in
+    let heap' = Heap.optimize heap non_temp_locs in
+    let logs' = CallLogs.optimize logs in
+    make env' heap' logs'
+
+  let optimize ?f_name astate = 
+    rm_redundant astate ?f_name
 
   let pp fmt { env; heap; logs } =
     F.fprintf fmt "===\n%a\n%a\n%a\n===" Env.pp env Heap.pp heap CallLogs.pp logs
