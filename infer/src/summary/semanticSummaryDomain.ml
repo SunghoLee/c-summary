@@ -162,7 +162,7 @@ module SStr = struct
 
   let pp fmt = function 
     Top -> 
-      F.fprintf fmt "\'T_str\'"
+      F.fprintf fmt "\'StrTop\'"
     |  String s -> F.fprintf fmt "\'%s\'" s
 end
 
@@ -177,7 +177,7 @@ module IInt = struct
 
   let to_int = function Int i -> i | _ -> failwith "Cannot unwrap the Top integer."
 
-  let pp fmt = function Int i -> F.fprintf fmt "\'%d\'" i | Top -> F.fprintf fmt "T"
+  let pp fmt = function Int i -> F.fprintf fmt "\'%d\'" i | Top -> F.fprintf fmt "IntTop"
 
   let ( + ) lhs rhs =
     match lhs, rhs with
@@ -339,9 +339,9 @@ module Val = struct
 
   let pp fmt = function
     Bot -> 
-      F.fprintf fmt "bot"
+      F.fprintf fmt "ValBot"
     | Top -> 
-      F.fprintf fmt "top"
+      F.fprintf fmt "ValTop"
     | Loc l -> 
       F.fprintf fmt "%a" Loc.pp l
     | Str s -> 
@@ -606,7 +606,7 @@ module AVS = struct
 
   let pp fmt avs = 
     if is_empty avs then 
-      F.fprintf fmt "Bot"
+      F.fprintf fmt "AVSBot"
     else
       pp fmt avs
 

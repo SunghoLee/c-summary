@@ -247,11 +247,9 @@ module TransferFunctions = struct
           let heap''' = Helper.store lhs_avs rhs_avs heap'' in
           mk_domain env heap''' logs
       | Store (e1 , typ, e2, loc) -> 
-          let () = L.progress "Domain:%a\n@." Domain.pp (mk_domain env heap logs) in
           let lhs_avs, heap' = exec_expr scope env heap e1 in
           let rhs_avs, heap'' = exec_expr scope env heap' e2 in
           let heap''' = Helper.store lhs_avs rhs_avs heap'' in
-          let () = L.progress "AFTER:%a\n@." Heap.pp heap''' in
           mk_domain env heap''' logs
       | Prune (e, loc, b, i) -> (* do not support heap pruning *)
           {env; heap; logs}
