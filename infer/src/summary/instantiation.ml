@@ -107,7 +107,7 @@ let rec mk_ienv_param_loc: Tenv.t -> Loc.t -> Typ.t -> Heap.t -> Heap.t -> InstE
                   let caller_avs = Heap.find ins_loc caller in
                   (InstEnv.add loc caller_avs ienv)
                   |> expand_offset loc caller_avs typ
-              | _ -> failwith "value must be a location."))
+              | _ -> failwith (F.asprintf "value must be a location: %a\n\t=> %a -> %a." InstEnv.pp ienv Loc.pp loc' Val.pp value)))
             |> (fun f -> AVS.fold f ins_avs ienv)
         | _, Offset (loc', index) ->
             failwith "does not handle this case!"
@@ -230,7 +230,7 @@ let comp_heap base caller callee ienv =
   let ienv = expand_ienv_for_offset ienv caller callee in
   let f = fun (loc: Loc.t) avs base -> 
     match loc with
-    | ConstLoc _ ->
+    | ConstLoc _ | DynLoc _ | Ret _ ->
         Heap.add loc (inst_avs avs ienv) base 
     | _ ->
         let ival_avs = inst_avs avs ienv in

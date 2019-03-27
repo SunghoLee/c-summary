@@ -262,7 +262,7 @@ module TransferFunctions = struct
               Env.add lhs_var (Loc.mk_const lhs_var) env
           in
           let lhs_loc = Env.find lhs_var env' in
-          let ret_loc = Loc.mk_dyn (Location.to_string loc) in
+          let ret_loc = Loc.mk_dyn ((Location.to_string loc) ^ ":ret") in
           let ret_loc_ptr = Loc.mk_pointer ret_loc in
           let heap' = Heap.add lhs_loc (AVS.singleton (Val.of_loc ret_loc, Cst.cst_true)) heap in
           let heap'' = Heap.add ret_loc (AVS.singleton (Val.of_loc ret_loc_ptr, Cst.cst_true)) heap' in
@@ -420,6 +420,8 @@ module Initializer = struct
                 in
                 mk_array index tmap
             | Tint _ -> (* ignore non-pointer types *)
+                tmap
+            | Tfloat _ -> (* ignore non-pointer types *)
                 tmap
             | Tfun _ -> (* ignore non-pointer types *)
                 tmap 

@@ -833,6 +833,8 @@ module LogUnit = struct
         F.fprintf fmt "%a, %a" Loc.pp h pp_list t
     in
     F.fprintf fmt "{%a; %a; %a; %a}" Loc.pp rloc JNIFun.pp jfun pp_list args Heap.pp heap
+
+  let optimize u = { u with heap = (Heap.optimize u.heap u.args) }
 end
 
 module CallLogs = struct
@@ -844,13 +846,7 @@ module CallLogs = struct
 
   let join = union
 
-  let optimize logs = 
-    let opt_unit u = 
-      let args = LogUnit.get_args u in
-      let heap = LogUnit.get_heap u in
-      { u with LogUnit.heap = (Heap.optimize heap args) }
-    in
-    map opt_unit logs
+  let optimize logs = map LogUnit.optimize logs
 
   let widen ~prev ~next =
     if prev < next then (* log size is increasing *)
@@ -905,7 +901,6 @@ module Domain = struct
   let widen ~prev ~next ~num_iters = 
     if num_iters >= widen_iter then
       (* TODO: need to widen for loop statements *)
-      let () = L.progress "\t\t\ ### WIDENING(%d)!! ### \n@." num_iters in 
       { env = Env.widen ~prev:prev.env ~next:next.env
       ; heap = Heap.widen ~prev:prev.heap ~next:next.heap
       ; logs = CallLogs.widen ~prev:prev.logs ~next:next.logs }

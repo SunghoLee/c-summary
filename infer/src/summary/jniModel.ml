@@ -45,7 +45,6 @@ let is_jni_obj_typ typ =
       false
 
 let is_jni_struct typ =
-  let () = L.progress "STRUCT? %a\n@." (Typ.pp_full Pp.text) typ in
   match Typ.name typ with
   | Some s ->
       Caml.List.mem (Typ.Name.name s) jni_struct
