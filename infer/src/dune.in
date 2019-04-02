@@ -59,7 +59,15 @@ let stanzas =
  (flags (%s))
  (ocamlopt_flags (%s))
  (libraries %s)
- (modules :standard \ %s infertop)
+ (modules :standard \ %s infertop SemanticSummaryTest)
+ (preprocess (pps ppx_compare ppx_sexp_conv -no-check))
+)
+
+(test
+ (name SemanticSummaryTest)
+ (flags (-open InferModules))
+ (libraries InferModules)
+ (modules SemanticSummaryTest)
  (preprocess (pps ppx_compare ppx_sexp_conv -no-check))
 )
 

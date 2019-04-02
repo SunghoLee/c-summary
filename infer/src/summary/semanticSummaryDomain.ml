@@ -132,6 +132,40 @@ module Loc = struct
 
   let unwrap_ptr = function Pointer l -> l | _ -> failwith "This location is not a pointer."
 
+  let leq_offset lhs rhs =
+    match lhs, rhs with
+    | _, IndexTop ->
+        true
+    | IndexTop, _ ->
+        false
+    | I i1, I i2 ->
+        i1 = i2
+    | F lhs_field, F rhs_field ->
+        String.equal lhs_field rhs_field
+    | _ ->
+        false
+
+  let rec ( <= ) lhs rhs =
+    match lhs, rhs with
+    | _, Top ->
+        true
+    | Top, _ ->
+        false
+    | Bot, _ ->
+        true
+    | _, Bot ->
+        false
+    | ConstLoc lhs_const, ConstLoc rhs_const ->
+        (Var.compare lhs_const rhs_const) = 0
+    | DynLoc lhs_dyn, DynLoc rhs_dyn ->
+        String.equal lhs_dyn rhs_dyn
+    | Pointer lhs_ptr, Pointer rhs_ptr ->
+        lhs_ptr <= rhs_ptr
+    | Offset (lhs_loc, lhs_index), Offset (rhs_loc, rhs_index) ->
+        (lhs_loc <= rhs_loc) && (leq_offset lhs_index rhs_index)
+    | Ret lhs_ret, Ret rhs_ret ->
+        String.equal lhs_ret rhs_ret
+
   let rec pp fmt = function
     Bot -> F.fprintf fmt "bot"
     | Top -> F.fprintf fmt "top"
@@ -156,6 +190,15 @@ end
 module SStr = struct
   type t = Top | String of string [@@deriving compare]
 
+  let ( <= ) lhs rhs =
+    match lhs, rhs with
+    | _, Top ->
+        true
+    | Top, _ ->
+        false
+    | String lhs_string, String rhs_string ->
+        String.equal lhs_string rhs_string
+
   let top = Top 
 
   let of_string s = String s
@@ -178,6 +221,15 @@ module IInt = struct
   let to_int = function Int i -> i | _ -> failwith "Cannot unwrap the Top integer."
 
   let pp fmt = function Int i -> F.fprintf fmt "\'%d\'" i | Top -> F.fprintf fmt "IntTop"
+
+  let leq lhs rhs =
+    match lhs, rhs with
+    | _, Top ->
+        true
+    | Top, _ ->
+        false
+    | Int lhs_int, Int rhs_int ->
+        lhs_int = rhs_int
 
   let ( + ) lhs rhs =
     match lhs, rhs with
@@ -354,6 +406,25 @@ module Val = struct
       F.fprintf fmt "%a" JMethodID.pp jm
     | JFieldID jf -> 
       F.fprintf fmt "%a" JFieldID.pp jf
+
+  let ( <= ) lhs rhs =
+    match lhs, rhs with
+    | _, Top ->
+        true
+    | Top, _ -> 
+        false
+    | Bot, _ -> 
+        true
+    | _, Bot ->
+        false
+    | Loc lhs_loc, Loc rhs_loc ->
+        Loc.(lhs_loc <= rhs_loc)
+    | Str lhs_str, Str rhs_str ->
+        SStr.(lhs_str <= rhs_str)
+    | Int lhs_int, Int rhs_int ->
+        IInt.leq lhs_int rhs_int
+    | _, _ ->
+        false
 
   let bot = Bot
 
@@ -899,7 +970,9 @@ module Domain = struct
     ; logs = ( CallLogs.join lhs.logs rhs.logs ) }
 
   let widen ~prev ~next ~num_iters = 
+    let () = L.progress "PRE: %a\n NEXT: %a\n@." Heap.pp prev.heap Heap.pp next.heap in
     if num_iters >= widen_iter then
+      let () = L.progress "WIDENING: %d\n@." num_iters in
       (* TODO: need to widen for loop statements *)
       { env = Env.widen ~prev:prev.env ~next:next.env
       ; heap = Heap.widen ~prev:prev.heap ~next:next.heap
