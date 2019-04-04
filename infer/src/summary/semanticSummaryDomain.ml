@@ -24,6 +24,8 @@ module Var = struct
 
   let mk_scope s = Proc s
 
+  let glob_scope = GB
+
   let of_string ?(proc=GB) s =
     if String.is_prefix s ~prefix:"#GB" then
       {name = s; proc = proc; kind = Global}
@@ -165,6 +167,8 @@ module Loc = struct
         (lhs_loc <= rhs_loc) && (leq_offset lhs_index rhs_index)
     | Ret lhs_ret, Ret rhs_ret ->
         String.equal lhs_ret rhs_ret
+    | _, _ ->
+        false
 
   let rec pp fmt = function
     Bot -> F.fprintf fmt "bot"
@@ -252,7 +256,7 @@ module IInt = struct
   let ( / ) lhs rhs = 
     match lhs, rhs with
     | Top, _ | _, Top -> Top
-    | Int i1, Int i2 when i2 = 0 ->
+    | Int _, Int i2 when i2 = 0 ->
         top
     | Int i1, Int i2 ->
         Int (i1 / i2)
@@ -260,7 +264,7 @@ module IInt = struct
   let ( % ) lhs rhs = 
     match lhs, rhs with
     | Top, _ | _, Top -> Top
-    | Int i1, Int i2 when i2 = 0 ->
+    | Int _, Int i2 when i2 = 0 ->
         top
     | Int i1, Int i2 ->
         Int (i1 % i2)
@@ -347,6 +351,8 @@ end
 module JNIFun = struct
   type t = JF of string [@@deriving compare]
 
+  let ( <= ) lhs rhs = (compare lhs rhs) = 0
+    
   let of_string s = JF s
 
   let of_procname s = JF (Typ.Procname.to_string s)
@@ -664,11 +670,11 @@ module AVS = struct
 
   let widen ~prev ~next =
     if prev < next then (* value size is increasing *)
-      if for_all (fun (value, cst) -> Val.is_int value) next then (* all values are integers *)
+      if for_all (fun (value, _) -> Val.is_int value) next then (* all values are integers *)
         add (Val.of_int IInt.top, Cst.cst_true) empty
-      else if for_all (fun (value, cst) -> Val.is_loc value) next then (* all values are locations *)
+      else if for_all (fun (value, _) -> Val.is_loc value) next then (* all values are locations *)
         add (Val.of_loc Loc.top, Cst.cst_true) empty
-      else if for_all (fun (value, cst) -> Val.is_str value) next then (* all values are strings *)
+      else if for_all (fun (value, _) -> Val.is_str value) next then (* all values are strings *)
         add (Val.of_str SStr.top, Cst.cst_true) empty
       else (* others *)
         add (Val.top, Cst.cst_true) empty
@@ -918,6 +924,10 @@ module CallLogs = struct
   let join = union
 
   let optimize logs = map LogUnit.optimize logs
+
+  let find_all ret logs = 
+    (fun log -> (Loc.compare ret log.LogUnit.rloc) = 0)
+    |> (fun f -> filter f logs)
 
   let widen ~prev ~next =
     if prev < next then (* log size is increasing *)

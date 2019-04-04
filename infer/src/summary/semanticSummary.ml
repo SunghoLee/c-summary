@@ -137,10 +137,12 @@ module TransferFunctions = struct
           | Cfun _ ->
               AVS.bot, heap
           | Cstr s -> 
+              (* TODO: need to assign string literals indirectly?
               let nloc = Loc.mk_dyn s in
               let str = SStr.of_string s in
               let heap' = Heap.add nloc (AVS.singleton (Val.of_str str, Cst.cst_true)) heap in
-              AVS.singleton (Val.of_loc nloc, Cst.cst_true), heap'
+              AVS.singleton (Val.of_loc nloc, Cst.cst_true), heap'*)
+              AVS.singleton (Val.of_str (SStr.of_string s), Cst.cst_true), heap
           | Cfloat _ -> AVS.top, heap
           | Cclass _ -> AVS.bot, heap)
       | Cast (typ, e) ->

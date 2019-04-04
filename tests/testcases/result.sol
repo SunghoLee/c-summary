@@ -1,14 +1,13 @@
 {
   main:{
     env:{
-      x: "loc_x"
+      x: "<L>loc_x"
     },
     heap:{
-      "loc_y": 6,
-      ret:6 
+      "<L>loc_x": 6,
+      "<L>ret":6 
     },
-    logs:{
-    }
+    logs:[]
   }
 }
 
