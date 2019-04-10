@@ -14,167 +14,50 @@ let fun_params pdesc =
     let args = attrs.formals in
     Caml.List.map (fun (m, typ) -> ((Var.of_string (Mangled.to_string m) ~proc:scope), typ)) args
 
-(* return a location mapped by the location `loc' in the instantiation environment. 
- * because each mapping of the ienv is one-to-one, there is one and only one location mapped by `loc'. *)
-let loc_from_ienv loc ienv =
-  let avs = InstEnv.find loc ienv in
-  if (AVS.cardinal avs = 1) then
-    let (value, cst) = AVS.min_elt avs in
-    Val.to_loc value
-  else
-    failwith "The location does not have an one-to-one mapping in the instantiation environment."
-
-let rec mk_ienv_param_loc: Tenv.t -> Loc.t -> Typ.t -> Heap.t -> Heap.t -> InstEnv.t -> InstEnv.t =
-    fun tenv loc typ callee caller ienv ->
-      let expand_offset loc ins_avs offset_typ ienv =
-        let offsets = Heap.find_offsets_of loc callee in
-        (fun (loc: Loc.t) ienv -> (
-          match loc with
-          | Offset (_, index) ->
-              (fun ((value: Val.t), cst) ienv -> (
-                match value with
-                | Loc ins_loc ->
-                    (AVS.singleton ((Val.of_loc (Loc.mk_offset ins_loc index)), cst))
-                    |> (fun x -> InstEnv.add loc x ienv)
-                | _ ->
-                    failwith "must be a location."))
-              |> (fun f -> AVS.fold f ins_avs ienv)))
-        |> (fun f -> LocSet.fold f offsets ienv)
-      in
-      if JniModel.is_jni_struct typ then
+let rec fp_mk_ienv callee_heap caller_heap ienv =
+  let expand ((loc: Loc.t), _) ienv =
+    match loc with
+    | Offset (base, index) ->
+        let ins_base = InstEnv.find base ienv in
+        let ins_index = InstEnv.find index ienv in
+        Helper.(ins_base * ins_index) 
+        |> Caml.List.fold_left (fun ienv ((b, b_cst), (i, i_cst)) -> 
+            InstEnv.add loc (Val.singleton (Loc.mk_offset b i, Cst.cst_and b_cst i_cst)) ienv) ienv
+    | Pointer base ->
+        let ins_base = InstEnv.find base ienv in
+        (fun (b, cst) ienv ->
+          (match Heap.find_opt b caller_heap with
+          | Some v ->
+              InstEnv.add loc Helper.(v ^ cst) ienv
+          | None ->
+              ienv))
+        |> (fun f -> Val.fold f ins_base ienv)
+    | _ -> 
         ienv
-      else
-        match typ.desc, loc with
-        | Tptr (typ', _), ConstLoc _ -> (* [*l | l ] : t*, where l is a constant location in the callee environment. *)
-            mk_ienv_param_loc tenv (Loc.mk_pointer loc) typ' callee caller ienv
-        | Tptr (typ', _), Pointer loc' ->
-            let ins_avs = InstEnv.find loc' ienv in
-            (fun ((value: Val.t), cst) ienv ->
-              (match value with
-              | Loc ins_loc ->
-                  InstEnv.add loc (Heap.find ins_loc caller) ienv
-                  |> mk_ienv_param_loc tenv (Loc.mk_pointer loc) typ' callee caller
-              | _ -> failwith "value must be a location."))
-            |> (fun f -> AVS.fold f ins_avs ienv)
-        | Tptr (typ', _), Offset (loc', index) ->
-            failwith "struct cannot be propagated as a constant location."
-        | Tstruct _, ConstLoc _ when not (JniModel.is_jni_obj_typ typ) -> (* [*l | l] : struct t *)
-            failwith "struct cannot be propagated as a constant location."
-        | Tstruct name, Pointer loc' when not (JniModel.is_jni_obj_typ typ) -> (* *l : struct t *)
-            let ins_avs = InstEnv.find loc' ienv in
-            let iter_avs = fun ((value: Val.t), cst) ienv ->
-              (match value with
-              | Loc ins_loc ->
-                  let ienv' = InstEnv.add loc (Heap.find ins_loc caller) ienv in
-                  let fld_typs = Helper.get_fld_and_typs name tenv in
-                  let ienv'' = (fun (fld, typ) ienv ->
-                    let index = Loc.mk_index_of_string fld in
-                    let ins_avs = InstEnv.find loc ienv in
-                    (fun ((value: Val.t), cst) ienv ->
-                      (match value with
-                      | Loc ins_loc ->
-                          let ins_offset = Loc.mk_offset ins_loc index in
-                          let param_offset = Loc.mk_offset loc index in
-                          InstEnv.add param_offset (AVS.singleton (Val.of_loc ins_offset, cst)) ienv
-                      | _ -> failwith "value must be a location."))
-                    |> (fun f -> AVS.fold f ins_avs ienv))
-                  |> (fun f -> Caml.List.fold_right f fld_typs ienv')
-                  in
-                  (fun (fld, typ) ienv ->
-                    let param_offset = Loc.mk_offset loc (Loc.mk_index_of_string fld) in
-                    mk_ienv_param_loc tenv (Loc.mk_pointer param_offset) typ callee caller ienv)
-                  |> (fun f -> Caml.List.fold_right f fld_typs ienv'')
-              | _ -> 
-                  failwith "value must be a location.")
-            in
-            AVS.fold iter_avs ins_avs ienv
-        | Tstruct name, Offset (loc', index) ->
-            failwith "struct cannot be propagated as a constant location."
-        | Tarray _, ConstLoc _ ->
-            failwith "struct cannot be propagated as a constant location."
-        | Tarray _, Pointer loc' ->
-            let () = L.progress "Typ: %a, Loc: %a\n@." (Typ.pp_full Pp.text) typ Loc.pp loc in
-            failwith "struct cannot be propagated as a constant location."
-        | Tarray _, Offset (loc', index) ->
-            failwith "struct cannot be propagated as a constant location."
-        | _, ConstLoc _ -> (* l : t *)
-            failwith "struct cannot be propagated as a constant location."
-        | _, Pointer loc' -> (* *l : t *)
-            let ins_avs = InstEnv.find loc' ienv in
-            (fun ((value: Val.t), cst) ienv ->
-              (match value with
-              | Loc ins_loc ->
-                  let caller_avs = Heap.find ins_loc caller in
-                  (InstEnv.add loc caller_avs ienv)
-                  |> expand_offset loc caller_avs typ
-              | _ -> failwith (F.asprintf "value must be a location: %a\n\t=> %a -> %a." InstEnv.pp ienv Loc.pp loc' Val.pp value)))
-            |> (fun f -> AVS.fold f ins_avs ienv)
-        | _, Offset (loc', index) ->
-            failwith "does not handle this case!"
-        | _ -> 
-            failwith "does not handle this case!"
-
-let rec mk_ienv_loc: Tenv.t -> Loc.t -> Typ.t -> Heap.t -> Heap.t -> InstEnv.t -> InstEnv.t =
-    fun tenv loc typ callee_heap caller_heap ienv ->
-      match typ.desc, loc with
-      | Tptr (typ', _), ConstLoc _ -> (* [*l | l ] : t*, where l is a constant location in the callee environment. *)
-          mk_ienv_loc tenv (Loc.mk_pointer loc) typ' callee_heap caller_heap ienv
-      | Tptr (typ', _), Pointer loc' ->
-          let ins_avs = InstEnv.find loc' ienv in
-          let iter_avs = fun ((value: Val.t), cst) ienv ->
-            (match value with
-            | Loc ins_loc ->
-                InstEnv.add loc (Heap.find ins_loc caller_heap) ienv
-                |> mk_ienv_loc tenv (Loc.mk_pointer loc) typ' callee_heap caller_heap
-            | _ -> failwith "value must be a location.")
-          in
-          AVS.fold iter_avs ins_avs ienv
-      | Tstruct _, ConstLoc _ when not (JniModel.is_jni_obj_typ typ) -> (* [*l | l] : struct t *)
-          failwith "struct cannot be propagated as a constant location."
-      | Tstruct name, Pointer loc' when not (JniModel.is_jni_obj_typ typ) -> (* *l : struct t *)
-          failwith "struct cannot be propagated as a constant location."
-      | Tarray _, ConstLoc _ ->
-          failwith "struct cannot be propagated as a constant location."
-      | Tarray _, Pointer loc' ->
-          failwith "struct cannot be propagated as a constant location."
-      | _, ConstLoc _ -> (* l : t *)
-          failwith "struct cannot be propagated as a constant location."
-      | _, Pointer loc' -> (* *l : t *)
-          let ins_avs = InstEnv.find loc' ienv in
-          (fun ((value: Val.t), cst) ienv ->
-            (match value with
-            | Loc ins_loc ->
-                InstEnv.add loc (Heap.find ins_loc caller_heap) ienv
-            | _ -> failwith "value must be a location."))
-          |> (fun f -> AVS.fold f ins_avs ienv)
-      | _ -> 
-          failwith "does not handle this case!"
-
-let mk_ienv_glob tenv glob_locs glob_heap caller_heap =
-  let f_glob = fun ienv (loc, _, typ) -> 
-    let avsfied = AVS.singleton (Val.of_loc loc, Cst.cst_true) in
-    let ienv' = InstEnv.add loc avsfied ienv in
-    mk_ienv_loc tenv (Loc.mk_pointer loc) typ glob_heap caller_heap ienv'
   in
-  Caml.List.fold_left f_glob InstEnv.empty glob_locs  
+  let fold_f loc value ienv = expand (loc, Cst.cst_true) ienv |> Val.fold expand value in
+  let ienv' = Heap.fold fold_f callee_heap ienv in
+  if InstEnv.equal (fun a b -> Val.equal a b) ienv ienv' then
+    ienv
+  else
+    fp_mk_ienv callee_heap caller_heap ienv'
 
 (* construct an instantiation environment at call sites. *)
-let mk_ienv tenv pdesc args callee_env callee_heap caller_heap glob_heap = 
-  let params = 
-    fun_params pdesc |>
-    Caml.List.map (fun (param, typ) -> (Loc.mk_const param), Typ.mk (Tptr (typ, Pk_pointer)))
+let mk_ienv tenv pdesc args callee_heap caller_heap = 
+  let params = fun_params pdesc 
+    |> Caml.List.map (fun (param, typ) -> (Loc.mk_explicit param), Typ.mk (Tptr (typ, Pk_pointer)))
   in
-  let heap' =
+  let heap' = Caml.List.fold_left2
     (fun heap (param, typ) arg -> Heap.add param arg heap)
-    |> (fun f -> Caml.List.fold_left2 f caller_heap params args)
+    caller_heap params args
   in
-  (fun ienv (loc, typ) ->
-    let ienv' =
-      AVS.singleton (Val.of_loc loc, Cst.cst_true)
-      |> (fun x -> InstEnv.add loc x ienv)
-    in
-    mk_ienv_param_loc tenv loc typ callee_heap heap' ienv')
-  |> (fun f -> Caml.List.fold_left f InstEnv.empty params)
+  let ienv = Caml.List.fold_left
+    (fun ienv (loc, typ) -> InstEnv.add loc (Val.singleton (loc, Cst.cst_true)) ienv)
+    InstEnv.empty params
+  in
+  let res = fp_mk_ienv callee_heap heap' ienv in
+  let () = L.progress "%a\n@." InstEnv.pp res in
+  res
 
 (* instantiate a constraint *)
 let rec inst_cst : Cst.t -> InstEnv.t -> Cst.t =
@@ -187,71 +70,45 @@ let rec inst_cst : Cst.t -> InstEnv.t -> Cst.t =
     | Not cst ->
         Not (inst_cst cst ienv)
     | Eq (loc1, loc2) ->
-        let iloc1_avs = InstEnv.find loc1 ienv in
-        let iloc2_avs = InstEnv.find loc2 ienv in
+        let iloc1_v = InstEnv.find loc1 ienv in
+        let iloc2_v = InstEnv.find loc2 ienv in
         let iter_iloc1 = fun (iloc1, cst1) cst ->
           let iter_iloc2 = fun (iloc2, cst2) cst ->
-            Cst.cst_and (Cst.cst_and (Cst.cst_eq (Val.to_loc iloc1) (Val.to_loc iloc2)) (Cst.cst_and cst1 cst2)) cst
+            Cst.cst_and (Cst.cst_and (Cst.cst_eq iloc1 iloc2) (Cst.cst_and cst1 cst2)) cst
           in
-          AVS.fold iter_iloc2 iloc2_avs cst
+          Val.fold iter_iloc2 iloc2_v cst
         in
-        AVS.fold iter_iloc1 iloc1_avs Cst.cst_true
+        Val.fold iter_iloc1 iloc1_v Cst.cst_true
     | _ as cst ->
         cst
 
 (* instantiate an Abstract Value Set *)
-let inst_avs avs ienv = 
-  let inst_val = fun ((value: Val.t), cst) avs -> 
+let inst_value v ienv = 
+  let inst_val = fun (loc, cst) res -> 
     let cst' = inst_cst cst ienv in
-    match value with
-    | Loc loc -> (
-      match InstEnv.find_opt loc ienv with
-      | Some s -> 
-          Helper.((s ^ cst') + avs)
-      | None ->
-          Helper.((AVS.singleton (value, cst')) + avs))
-    |_ -> 
-      Helper.((AVS.singleton (value, cst')) + avs)
+    Helper.(((InstEnv.find loc ienv) ^ cst') + res)
   in
-  AVS.fold inst_val avs AVS.empty
-
-let rec expand_ienv_for_offset ienv caller callee =
-  (*
-  let locset = flatten_heap_locs callee in
-  let rec expand = (fun loc ins_avs ienv ->
-
-  in 
-  InstEnv.fold expand ienv ienv
-  *)
-  ienv
+  Val.fold inst_val v Val.empty
 
 (* compose caller and callee heaps at call instructions. *)
 let comp_heap base caller callee ienv = 
-  let ienv = expand_ienv_for_offset ienv caller callee in
-  let f = fun (loc: Loc.t) avs base -> 
+  let f = fun (loc: Loc.t) v base -> 
     match loc with
-    | ConstLoc _ | DynLoc _ | Ret _ ->
-        Heap.add loc (inst_avs avs ienv) base 
+    | Explicit _ | Implicit _ | Ret _ ->
+        Heap.add loc (inst_value v ienv) base 
     | _ ->
-        let ival_avs = inst_avs avs ienv in
-        let update_avs = fun ((value: Val.t), cst) base -> (
-          match value with
-          | Loc loc' ->
-              let pre_avs = Heap.find loc' caller in
-              let merged_avs = Helper.((ival_avs ^ cst) 
-                + (pre_avs ^ (Cst.cst_not cst))) in
-              Heap.weak_update loc' merged_avs base
-          | _ -> 
-              Heap.weak_update loc (AVS.singleton (value, cst)) base)
+        let ival = inst_value v ienv in
+        let update_val = fun (loc', cst) base -> 
+          let pre_v = Heap.find loc' caller in
+          let merged_v = Helper.((ival ^ cst) 
+            + (pre_v ^ (Cst.cst_not cst))) in
+          Heap.weak_update loc' merged_v base
         in
-        let iloc_avs = InstEnv.find loc ienv in
-        AVS.fold update_avs iloc_avs base
+        let iloc_v = InstEnv.find loc ienv in
+        Val.fold update_val iloc_v base
   in
   let new_heap = Heap.fold f callee Heap.empty in
-  let iter_new_heap = fun loc avs base ->
-    Heap.add loc avs base
-  in
-  Heap.fold iter_new_heap new_heap base
+  Heap.fold Heap.add new_heap base
 
 (* compose caller and callee logs at call instructions. *)
 let comp_log base callee_logs caller_heap ienv = 

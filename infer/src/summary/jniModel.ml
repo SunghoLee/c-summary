@@ -7,6 +7,12 @@ let skip_prefixs =
   [ "_JNIEnv_"
   ; "JavaVM" ]
 
+let jni_entry = 
+  [ "OnLoad" ]
+
+let android_entry =
+  [ "android_main" ]
+
 let jni_struct = 
   [ "android_app"
   ; "_JNIEnv" ]
@@ -50,3 +56,7 @@ let is_jni_struct typ =
       Caml.List.mem (Typ.Name.name s) jni_struct
   | None ->
       false
+
+let is_entry f = 
+  let name = Typ.Procname.to_string f in
+  Caml.List.mem name (jni_entry @ android_entry)

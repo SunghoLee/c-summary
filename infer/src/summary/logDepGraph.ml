@@ -151,17 +151,11 @@ let mk_ldg logs =
   let is_in_heap = fun loc node ->
     let log = get_logunit node in
     let heap = log.LogUnit.heap in
-    let iter_heap = fun loc' avs ->
+    let iter_heap = fun loc' v ->
       if loc = loc' then 
         true
       else 
-        let iter_avs = fun (value, _) ->
-          if Val.is_loc value then
-            (Val.to_loc value) = loc
-          else
-            false
-        in
-        AVS.exists iter_avs avs
+        Val.exists (fun (l, _) -> l = loc) v
     in
     Heap.exists iter_heap heap
   in

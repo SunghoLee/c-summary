@@ -71,12 +71,32 @@ module JSON2Domain = struct
   end
 
   module JHeap = struct
+    let is_string avs =
+      let value, _ = AVS.min_elt avs in
+      Val.is_str value
+
+    let handle_string loc avs heap =
+      let value, _ = AVS.min_elt avs in
+      let str = Val.to_str value in
+      let chars = SStr.to_char_list str in
+      let heap', _ =
+        (fun (heap, i) c ->
+          let index = Loc.mk_index_of_int i in
+          let offset = Loc.mk_offset loc index in
+          (Heap.add offset (AVS.singleton (Val.of_char c, Cst.cst_true)) heap, i + 1))
+        |> (fun f -> Caml.List.fold_left f (heap, 0) chars)
+      in
+      heap'
+
     let convert ?proc json =
       let jval_list = Basic.Util.to_assoc json in
       (fun heap (jloc, jval) ->
         let loc = JLoc2Loc.convert ?proc jloc in
         let avs = JVal2AVS.convert ?proc jval in
-        Heap.add loc avs heap)
+        if is_string avs then
+          handle_string loc avs heap
+        else
+          Heap.add loc avs heap)
       |> (fun f -> Caml.List.fold_left f Heap.empty jval_list)
   end
 
@@ -207,7 +227,7 @@ let tests = "test suite for c-summary analyer" >::: [
           try
             assert_equal (leq_dom sol s) true ~msg
           with NotMatched err ->
-            assert_failure err))
+            assert_failure (err ^ "\n" ^ msg)))
     |> (fun f -> Caml.List.iter f @@ Caml.List.filter (fun p -> not(JniModel.is_jni p)) procs))
 ]
 

@@ -10,8 +10,8 @@ rule token = parse
 | [' ' '\t'] { token lexbuf }
 | '@' ['0'-'9']+ as lxm { let name = String.sub lxm 1 ((String.length lxm) - 1 ) in INDEX (int_of_string name) }
 | "ret" { RET }
-| "loc_" ['a'-'z''A'-'Z''_']+ as lxm { let name = String.sub lxm 4 ((String.length lxm) - 4) in CONST name}
-| "dyn_" ['a'-'z''A'-'Z''_']+ as lxm { let name = String.sub lxm 4 ((String.length lxm) - 4) in DYN name}
+| "loc_" ['a'-'z''A'-'Z''0'-'9''_''$']+ as lxm { let name = String.sub lxm 4 ((String.length lxm) - 4) in CONST name}
+| "dyn_" _+ as lxm { let name = String.sub lxm 4 ((String.length lxm) - 4) in DYN name}
 | '@' ['a'-'z''A'-'Z''_'] ['a'-'z''A'-'Z''0'-'9''_']+ as lxm { let name = String.sub lxm 1 ((String.length lxm) - 1 ) in FIELD name}
 | '(' {LPAREN}
 | ')' {RPAREN}

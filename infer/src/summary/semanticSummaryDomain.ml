@@ -77,36 +77,30 @@ module Var = struct
 end
 
 module Loc = struct
-  type t = Bot
-  | Top
-  | ConstLoc of Var.t
-  | DynLoc of string
+  type t = 
+  | Explicit of Var.t
+  | Implicit of string
+  | Const of const_type
   | Pointer of t
-  | Offset of t * index
+  | FunPointer of Typ.Procname.t
+  | Offset of t * t
   | Ret of string
   [@@deriving compare]
 
-  and index = IndexTop
-  | I of int
-  | F of string
-  | E of t
+  and const_type = 
+  | Integer of int
+  | String of string
   [@@deriving compare]
 
-  let bot = Bot
+  let is_explicit = function Explicit _ -> true | _ -> false
 
-  let top = Top
+  let is_implicit = function Implicit _ -> true | _ -> false
 
-  let index_top = IndexTop
-
-  let is_bot = function Bot -> true | _ -> false
-
-  let is_top = function Top -> true | _ -> false
-
-  let is_const = function ConstLoc _ -> true | _ -> false
-
-  let is_dyn = function DynLoc _ -> true | _ -> false
+  let is_const = function Const _ -> true | _ -> false
 
   let is_pointer = function Pointer _ -> true | _ -> false
+
+  let is_fun_pointer = function FunPointer _ -> true | _ -> false
 
   let is_ret = function Ret _ -> true | _ -> false
 
@@ -114,11 +108,17 @@ module Loc = struct
 
   let is_offset_of loc = function Offset (l, _) -> loc = l | _ -> false
 
-  let mk_const v = ConstLoc v
+  let mk_explicit v = Explicit v
 
-  let mk_dyn s = DynLoc s
+  let mk_implicit s = Implicit s
+
+  let mk_const_of_int i = Const (Integer i)
+
+  let mk_const_of_string s = Const (String s)
 
   let mk_pointer i = Pointer i
+
+  let mk_fun_pointer i = FunPointer i
 
   let mk_ret i = Ret i
 
@@ -126,226 +126,57 @@ module Loc = struct
 
   let mk_offset l i = Offset (l, i)
 
-  let mk_index_of_string s = F s
+  let unwrap_ptr = function Pointer i -> i | _ -> failwith "it is not a pointer."
 
-  let mk_index_of_int i = I i
+  let of_id ?proc id = Var.of_id ?proc id |> mk_explicit
 
-  let mk_index_of_expr e = E e
+  let of_pvar ?proc pvar = Var.of_pvar ?proc pvar |> mk_explicit
 
-  let unwrap_ptr = function Pointer l -> l | _ -> failwith "This location is not a pointer."
-
-  let leq_offset lhs rhs =
+  let rec leq_const lhs rhs =
     match lhs, rhs with
-    | _, IndexTop ->
-        true
-    | IndexTop, _ ->
-        false
-    | I i1, I i2 ->
-        i1 = i2
-    | F lhs_field, F rhs_field ->
-        String.equal lhs_field rhs_field
+    | Integer lhs_int, Integer rhs_int ->
+        lhs_int = rhs_int
+    | String lhs_str, String rhs_str ->
+        lhs_str = rhs_str
     | _ ->
         false
 
-  let rec ( <= ) lhs rhs =
+  and ( <= ) lhs rhs =
     match lhs, rhs with
-    | _, Top ->
-        true
-    | Top, _ ->
-        false
-    | Bot, _ ->
-        true
-    | _, Bot ->
-        false
-    | ConstLoc lhs_const, ConstLoc rhs_const ->
+    | Explicit lhs_const, Explicit rhs_const ->
         (Var.compare lhs_const rhs_const) = 0
-    | DynLoc lhs_dyn, DynLoc rhs_dyn ->
-        String.equal lhs_dyn rhs_dyn
+    | Implicit lhs_str, Implicit rhs_str ->
+        lhs_str = rhs_str
+    | Const lhs_const, Const rhs_const ->
+        leq_const lhs_const rhs_const
     | Pointer lhs_ptr, Pointer rhs_ptr ->
         lhs_ptr <= rhs_ptr
+    | FunPointer lhs_ptr, FunPointer rhs_ptr ->
+        (Typ.Procname.compare lhs_ptr rhs_ptr) = 0
     | Offset (lhs_loc, lhs_index), Offset (rhs_loc, rhs_index) ->
-        (lhs_loc <= rhs_loc) && (leq_offset lhs_index rhs_index)
+        (lhs_loc <= rhs_loc) && (lhs_index <= rhs_index)
     | Ret lhs_ret, Ret rhs_ret ->
         String.equal lhs_ret rhs_ret
     | _, _ ->
         false
 
   let rec pp fmt = function
-    Bot -> F.fprintf fmt "bot"
-    | Top -> F.fprintf fmt "top"
-    | ConstLoc i -> F.fprintf fmt "CL#%a(%a)" Var.pp i Var.pp_var_scope i
-    | DynLoc i -> F.fprintf fmt "DL#%s" i
-    | Pointer p -> F.fprintf fmt "*( %a )" pp p
-    | Offset (l, i) -> F.fprintf fmt "%a@%a" pp l pp_index i
-    | Ret s -> F.fprintf fmt "Ret#%s" s
-  and pp_index fmt = function
-    | IndexTop -> F.fprintf fmt "Top"
-    | I i -> F.fprintf fmt "%d" i
-    | F s -> F.fprintf fmt "%s" s
-    | E l -> pp fmt l
+    | Explicit i -> F.fprintf fmt "EX#%a(%a)" Var.pp i Var.pp_var_scope i
+    | Implicit i -> F.fprintf fmt "IM#%s" i
+    | Const i -> F.fprintf fmt "CONST#%a" pp_const i
+    | Pointer p -> F.fprintf fmt "*(%a)" pp p
+    | FunPointer p -> F.fprintf fmt "FN#%s" (Typ.Procname.to_string p)
+    | Offset (l, i) -> F.fprintf fmt "%a@%a" pp l pp i
+    | Ret s -> F.fprintf fmt "RET#%s" s
+  and pp_const fmt = function
+    | Integer i -> F.fprintf fmt "%d" i
+    | String s -> F.fprintf fmt "%s" s
 
   let to_string i = F.asprintf "%a" pp i
 end
 
 module LocSet = struct 
   include PrettyPrintable.MakePPSet(Loc)
-end
-
-module SStr = struct
-  type t = Top | String of string [@@deriving compare]
-
-  let ( <= ) lhs rhs =
-    match lhs, rhs with
-    | _, Top ->
-        true
-    | Top, _ ->
-        false
-    | String lhs_string, String rhs_string ->
-        String.equal lhs_string rhs_string
-
-  let top = Top 
-
-  let of_string s = String s
-
-  let pp fmt = function 
-    Top -> 
-      F.fprintf fmt "\'StrTop\'"
-    |  String s -> F.fprintf fmt "\'%s\'" s
-end
-
-module IInt = struct
-  type t = Int of int | Top [@@deriving compare]
-
-  let top = Top
-
-  let is_top = function Top -> true | _ -> false
-
-  let of_int i = Int i
-
-  let to_int = function Int i -> i | _ -> failwith "Cannot unwrap the Top integer."
-
-  let pp fmt = function Int i -> F.fprintf fmt "\'%d\'" i | Top -> F.fprintf fmt "IntTop"
-
-  let leq lhs rhs =
-    match lhs, rhs with
-    | _, Top ->
-        true
-    | Top, _ ->
-        false
-    | Int lhs_int, Int rhs_int ->
-        lhs_int = rhs_int
-
-  let ( + ) lhs rhs =
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        Int (i1 + i2)
-
-  let ( - ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        Int (i1 - i2)
-
-  let ( * ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        Int (i1 * i2)
-
-  let ( / ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int _, Int i2 when i2 = 0 ->
-        top
-    | Int i1, Int i2 ->
-        Int (i1 / i2)
-
-  let ( % ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int _, Int i2 when i2 = 0 ->
-        top
-    | Int i1, Int i2 ->
-        Int (i1 % i2)
-
-  let ( << ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        Int ((lsl) i1 i2)
-
-  let ( >> ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        Int ((lsr) i1 i2)
-
-  let ( < ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        if i1 < i2 then Int 1 else Int 0
-
-  let ( <= ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        if i1 <= i2 then Int 1 else Int 0
-
-  let ( > ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        if i1 > i2 then Int 1 else Int 0
-
-  let ( >= ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        if i1 >= i2 then Int 1 else Int 0
-
-  let ( = ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        if i1 = i2 then Int 1 else Int 0
-
-  let ( != ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        if not (phys_equal i1 i2) then Int 1 else Int 0
-
-  let ( & ) lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        Int ((land) i1 i2)
-
-  let b_or lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        Int ((lor) i1 i2)
-
-  let b_xor lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        Int ((lxor) i1 i2)
-
-  let l_and lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        if i1 <> 0 && i2 <> 0 then Int 1 else Int 0
-
-  let l_or lhs rhs = 
-    match lhs, rhs with
-    | Top, _ | _, Top -> Top
-    | Int i1, Int i2 ->
-        if i1 <> 0 || i2 <> 0 then Int 1 else Int 0
 end
 
 module JNIFun = struct
@@ -382,99 +213,6 @@ module JFieldID = struct
   let of_str jc f = JF (jc, f)
 
   let pp fmt (JF (jc, f)) = F.fprintf fmt "%a.%s" JClass.pp jc f 
-end
-
-module Val = struct
-  type t = Bot
-    | Top
-    | Loc of Loc.t
-    | Str of SStr.t
-    | Int of IInt.t
-    | JClass of JClass.t
-    | JMethodID of JMethodID.t
-    | JFieldID of JFieldID.t
-    [@@deriving compare]
-
-  let pp fmt = function
-    Bot -> 
-      F.fprintf fmt "ValBot"
-    | Top -> 
-      F.fprintf fmt "ValTop"
-    | Loc l -> 
-      F.fprintf fmt "%a" Loc.pp l
-    | Str s -> 
-      F.fprintf fmt "%a" SStr.pp s
-    | Int i -> 
-      F.fprintf fmt "%a" IInt.pp i
-    | JClass jc -> 
-      F.fprintf fmt "%a" JClass.pp jc
-    | JMethodID jm -> 
-      F.fprintf fmt "%a" JMethodID.pp jm
-    | JFieldID jf -> 
-      F.fprintf fmt "%a" JFieldID.pp jf
-
-  let ( <= ) lhs rhs =
-    match lhs, rhs with
-    | _, Top ->
-        true
-    | Top, _ -> 
-        false
-    | Bot, _ -> 
-        true
-    | _, Bot ->
-        false
-    | Loc lhs_loc, Loc rhs_loc ->
-        Loc.(lhs_loc <= rhs_loc)
-    | Str lhs_str, Str rhs_str ->
-        SStr.(lhs_str <= rhs_str)
-    | Int lhs_int, Int rhs_int ->
-        IInt.leq lhs_int rhs_int
-    | _, _ ->
-        false
-
-  let bot = Bot
-
-  let top = Top
-
-  let of_loc l = Loc l
-
-  let of_str s = Str s
-  
-  let of_int i = Int i
-
-  let of_jclass jc = JClass jc
-
-  let of_jmethod_id jm = JMethodID jm
-
-  let of_jfield_id jf = JFieldID jf
-
-  let is_bot = function Bot -> true | _ ->false
-
-  let is_top = function Top -> true | _ ->false
-
-  let is_loc = function Loc _ -> true | _ -> false
-
-  let is_str = function Str _ -> true | _ -> false
-
-  let is_int = function Int _ -> true | _ -> false
-
-  let is_jclass = function JClass _ -> true | _ -> false
-
-  let is_jmethod_id = function JMethodID _ -> true | _ -> false
-
-  let is_jfield_id  = function JFieldID _ -> true | _ -> false
-
-  let to_loc = function Loc l -> l | _ as arg -> failwith (F.asprintf "Wrong type argument: %a" pp arg)
-
-  let to_str = function Str s -> s | _ -> failwith "Wrong type argument."
-
-  let to_int = function Int i -> i | _ -> failwith "Wrong type argument."
-
-  let to_jclass = function JClass jc -> jc | _ -> failwith "Wrong type argument."
-
-  let to_jmethod_id = function JMethodID jm -> jm | _ -> failwith "Wrong type argument."
-
-  let to_jfield_id = function JFieldID ji -> ji | _ -> failwith "Wrong type argument."
 end
 
 module Cst = struct
@@ -535,7 +273,7 @@ module Cst = struct
       fun ctxt loc ->
         let sort = Arithmetic.Integer.mk_sort ctxt in
         match loc with
-        | ConstLoc _ ->
+        | Explicit _ ->
             (index := !index + 1; (Expr.mk_numeral_int ctxt (get_index loc) sort))
         | _ ->
             (index := !index + 1; (Expr.mk_const ctxt (Symbol.mk_int ctxt !index) sort))
@@ -644,22 +382,16 @@ module Cst = struct
   end 
 end
 
-module ValCst = struct
-  type t = Val.t * Cst.t
+module LocCst = struct
+  type t = Loc.t * Cst.t
     [@@deriving compare]
   
-  let top = Val.top, Cst.cst_true
-
   let pp fmt (v, c) = 
-      F.fprintf fmt "(%a, %a)" Val.pp v Cst.pp c
+      F.fprintf fmt "(%a, %a)" Loc.pp v Cst.pp c
 end
 
-module AVS = struct
-  include PrettyPrintable.MakePPSet(ValCst)
-
-  let top = singleton ValCst.top
-
-  let bot = empty
+module Val = struct
+  include PrettyPrintable.MakePPSet(LocCst)
 
   (* partial order of AbstractValueSet *)
   let ( <= ) = subset
@@ -669,21 +401,11 @@ module AVS = struct
   let join = union
 
   let widen ~prev ~next =
-    if prev < next then (* value size is increasing *)
-      if for_all (fun (value, _) -> Val.is_int value) next then (* all values are integers *)
-        add (Val.of_int IInt.top, Cst.cst_true) empty
-      else if for_all (fun (value, _) -> Val.is_loc value) next then (* all values are locations *)
-        add (Val.of_loc Loc.top, Cst.cst_true) empty
-      else if for_all (fun (value, _) -> Val.is_str value) next then (* all values are strings *)
-        add (Val.of_str SStr.top, Cst.cst_true) empty
-      else (* others *)
-        add (Val.top, Cst.cst_true) empty
-    else
-      join prev next
+    join prev next
 
   let pp fmt avs = 
     if is_empty avs then 
-      F.fprintf fmt "AVSBot"
+      F.fprintf fmt "ValBot"
     else
       pp fmt avs
 
@@ -697,70 +419,28 @@ module AVS = struct
     |> (fun f -> fold f avs empty)
 end 
 
-module Env = struct
-  module M = PrettyPrintable.MakePPMap(Var)
-
-  include (M : module type of M with type 'a t := 'a M.t)
-
-  type t = Loc.t M.t
-  [@@deriving compare]
-
-  let find v env = 
-    match find_opt v env with
-    | Some l ->
-        l
-    | None ->
-        Loc.bot
-
-  let ( <= ) lhs rhs = 
-    let f = fun key value -> 
-      match find_opt key rhs with
-      | Some value' -> 
-        (Loc.compare value value') = 0
-      | None ->
-        false
-    in
-    for_all f lhs 
-
-  let join lhs rhs = 
-    let f = fun key val1 val2 -> 
-      if (Loc.compare val1 val2) = 0 then Some val1
-      else failwith "A variable cannot have multiple addresses."
-    in
-    union f lhs rhs
-
-  let widen ~prev ~next =
-    (* Environment does not need to be widen *)
-    if (compare prev next) <> 0 then
-      failwith "Cannot be widen two different environments."
-    else
-      next
-
-  let pp = pp ~pp_value:Loc.pp
-end
-
 module InstEnv = struct
   module M = PrettyPrintable.MakePPMap(Loc)
 
   include (M: module type of M with type 'a t := 'a M.t)
 
-  type t = AVS.t M.t
+  type t = Val.t M.t
 
-  let find loc ienv =
+  let rec find loc ienv =
     match find_opt loc ienv with
     | Some s -> 
         s
     | None ->
-        AVS.bot
+        Val.singleton (loc, Cst.cst_true)
 
   let add loc avs ienv =
     match find_opt loc ienv with
     | Some s ->
-        add loc (AVS.union s avs) ienv
+        add loc (Val.union s avs) ienv
     | _ ->
         add loc avs ienv
 
-  let pp = pp ~pp_value: AVS.pp
+  let pp = pp ~pp_value: Val.pp
 end
 
 module Heap = struct
@@ -769,25 +449,21 @@ module Heap = struct
 
   include (M: module type of M with type 'a t := 'a M.t)
 
-  type t = AVS.t M.t
+  type t = Val.t M.t
 
-  let pp = pp ~pp_value:AVS.pp
+  let pp = pp ~pp_value:Val.pp
 
   let compare h1 h2 =
     (fun avs1 avs2 ->
-      AVS.compare avs1 avs2)
+      Val.compare avs1 avs2)
     |> (fun x -> compare x h1 h2)
 
   let flatten_heap_locs heap =
-  (fun loc avs locset ->
+  (fun loc v locset ->
     let locset' = LocSet.add loc locset in
-    (fun ((value: Val.t), _) locset ->
-      match value with
-      | Loc loc ->
-          LocSet.add loc locset
-      | _ ->
-          locset)
-    |> (fun f -> AVS.fold f avs locset'))
+    (fun ((l: Loc.t), _) locset ->
+      LocSet.add loc locset)
+    |> (fun f -> Val.fold f v locset'))
   |> (fun f -> fold f heap LocSet.empty)
 
   let find_offsets_of l heap =
@@ -796,74 +472,71 @@ module Heap = struct
 
   let find l heap =
     match find_opt l heap with
-    | Some avs ->
-        avs
+    | Some v ->
+        v
     | None ->
-        AVS.bot
+        Val.empty
+        (*Val.singleton (Loc.mk_pointer l, Cst.cst_true)*)
 
   let ( <= ) lhs rhs =
     let f = fun key val1 ->
       match find_opt key rhs with
       | Some val2 -> 
-          AVS.(val1 <= val2)
+          Val.(val1 <= val2)
       | None -> 
           false
     in
     for_all f lhs
 
-  let weak_update loc avs heap =
+  let weak_update loc v heap =
     match find_opt loc heap with
-    | Some avs' -> 
-        add loc (AVS.union avs avs') heap
+    | Some v' -> 
+        add loc (Val.union v v') heap
     | None ->
-        add loc avs heap
+        add loc v heap
 
   let disjoint_union heap1 heap2 =
     union (fun _ _ _ -> failwith "Heaps are not disjoint!") heap1 heap2
 
   let opt_cst_in_heap heap =
-    let opt_avs_heap = fun loc avs heap ->
-      let avs' = AVS.optimize avs in
-      if AVS.is_empty avs' then
+    let opt_v_heap = fun loc v heap ->
+      let v' = Val.optimize v in
+      if Val.is_empty v' then
         heap
       else
-        add loc avs' heap
+        add loc v' heap
     in
-    fold opt_avs_heap heap empty
+    fold opt_v_heap heap empty
 
-  let optimize heap locs = 
+  let optimize ?flocs heap = 
     let heap' = opt_cst_in_heap heap in
-    let f_heap_closure = fun locset loc ->
-      let rec f_avs_closure: ValCst.t -> LocSet.t -> LocSet.t  = 
-        fun (value, _) locset ->
-          match value with
-          | Loc loc ->
-              let locset' = 
-                LocSet.add loc locset
-                |> LocSet.union (find_offsets_of loc heap') 
-              in
-              (match find_opt loc heap' with
-              | Some avs -> 
-                  AVS.fold f_avs_closure avs locset'
-              | None ->
-                  locset')
-          | _ -> 
-              locset
-      in
-      let locset' = LocSet.add loc locset in
-      match find_opt loc heap' with
-      | Some avs -> 
-          AVS.fold f_avs_closure avs locset'
-      | None ->
-          locset'
+    let locs = (
+      match flocs with
+      | Some s ->
+          s
+      | None -> 
+          fold (fun loc _ ls -> match loc with Explicit _ -> loc::ls | _ -> ls) heap' [])
     in
-    let loc_closure = Caml.List.fold_left f_heap_closure LocSet.empty locs in
+    let rec calc_closure locset loc =
+      let locset' = find_offsets_of loc heap' in
+      let locset'' = 
+        (match find_opt loc heap' with
+        | Some v ->
+            Val.fold (fun (l,_) ls -> LocSet.add l ls) v locset'
+        | None ->
+            locset')
+      in
+      LocSet.fold (fun l ls -> LocSet.union ls (calc_closure LocSet.empty l)) locset'' locset'' 
+      |> LocSet.add loc 
+      |> LocSet.union locset
+    in
+    let loc_closure = Caml.List.fold_left calc_closure LocSet.empty locs in
     filter (fun loc _ -> LocSet.mem loc loc_closure) heap'
 
   let join lhs rhs = 
     let lhs' = opt_cst_in_heap lhs in
     let rhs' = opt_cst_in_heap rhs in
-    union (fun key val1 val2 -> Some (AVS.join val1 val2)) lhs' rhs'
+    union (fun key val1 val2 -> Some (Val.join val1 val2)) lhs' rhs'
 
   let widen ~prev ~next =
     (fun loc prev_v_opt next_v_opt ->
@@ -871,7 +544,7 @@ module Heap = struct
       | None, _ | _, None ->
           failwith "Cannot be widen: two heaps have different locations."
       | Some prev_v, Some next_v ->
-          Some (AVS.widen ~prev:prev_v ~next:next_v))
+          Some (Val.widen ~prev:prev_v ~next:next_v))
     |> (fun f -> merge f prev next)
 
 end
@@ -911,7 +584,7 @@ module LogUnit = struct
     in
     F.fprintf fmt "{%a; %a; %a; %a}" Loc.pp rloc JNIFun.pp jfun pp_list args Heap.pp heap
 
-  let optimize u = { u with heap = (Heap.optimize u.heap u.args) }
+  let optimize u = { u with heap = (Heap.optimize u.heap ~flocs:u.args) }
 end
 
 module CallLogs = struct
@@ -939,44 +612,35 @@ end
 
 module Domain = struct
   type t = 
-    { env: Env.t
-    ; heap: Heap.t
+    { heap: Heap.t
     ; logs: CallLogs.t }
 
   let empty = 
-    { env = Env.empty
-    ; heap = Heap.empty
+    { heap = Heap.empty
     ; logs = CallLogs.empty }
-  let get_env s = s.env
 
   let get_heap s = s.heap
 
   let get_logs s = s.logs
 
   let init = 
-    { env = Env.empty
-    ; heap = Heap.empty
+    { heap = Heap.empty
     ; logs = CallLogs.empty }
 
-  let make env' heap' logs' = 
-    { env = env'
-    ; heap = heap'
+  let make heap' logs' = 
+    { heap = heap'
     ; logs = logs' }
-
-  let update_env env' s = { s with env = env' }
 
   let update_heap heap' s = { s with heap = heap' }
 
   let update_logs logs' s = { s with logs = logs' }
 
   let ( <= ) ~lhs ~rhs = 
-    Env.( lhs.env <= rhs.env ) 
-    && Heap.( lhs.heap <= rhs.heap ) 
+    Heap.( lhs.heap <= rhs.heap ) 
     && CallLogs.( lhs.logs <= rhs.logs )
 
   let join lhs rhs = 
-    { env = ( Env.join lhs.env rhs.env )
-    ; heap = ( Heap.join lhs.heap rhs.heap )
+    { heap = ( Heap.join lhs.heap rhs.heap )
     ; logs = ( CallLogs.join lhs.logs rhs.logs ) }
 
   let widen ~prev ~next ~num_iters = 
@@ -984,30 +648,29 @@ module Domain = struct
     if num_iters >= widen_iter then
       let () = L.progress "WIDENING: %d\n@." num_iters in
       (* TODO: need to widen for loop statements *)
-      { env = Env.widen ~prev:prev.env ~next:next.env
-      ; heap = Heap.widen ~prev:prev.heap ~next:next.heap
+      { heap = Heap.widen ~prev:prev.heap ~next:next.heap
       ; logs = CallLogs.widen ~prev:prev.logs ~next:next.logs }
     else 
       join prev next 
 
-  let rm_redundant ?f_name {env; heap; logs} = 
-    let env' = Env.filter (fun v _ -> not (Var.is_temporal v)) env in
-    let non_temp_locs = (
-      match f_name with
+  let rm_redundant ?f_name {heap; logs} = 
+    let non_temp_locs = 
+      (match f_name with
       | Some f -> 
-          Env.fold (fun _ loc loclist -> loc :: loclist) env' [Loc.mk_ret f]
+          [Loc.mk_ret f]
+          |> Heap.fold (fun loc _ loclist -> if Loc.is_explicit loc then loc::loclist else loclist) heap
       | None ->
-          Env.fold (fun _ loc loclist -> loc :: loclist) env' [])
+          Heap.fold (fun loc _ loclist -> if Loc.is_explicit loc then loc::loclist else loclist) heap [])
     in
-    let heap' = Heap.optimize heap non_temp_locs in
+    let heap' = Heap.optimize heap ~flocs:non_temp_locs in
     let logs' = CallLogs.optimize logs in
-    make env' heap' logs'
+    make heap' logs'
 
   let optimize ?f_name astate = 
     rm_redundant astate ?f_name
 
-  let pp fmt { env; heap; logs } =
-    F.fprintf fmt "===\n%a\n%a\n%a\n===" Env.pp env Heap.pp heap CallLogs.pp logs
+  let pp fmt { heap; logs } =
+    F.fprintf fmt "===\n%a\n%a\n===" Heap.pp heap CallLogs.pp logs
 end
 
 include Domain
