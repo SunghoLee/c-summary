@@ -10,15 +10,6 @@ module JSON2Domain = struct
 
   let to_string = Basic.to_string
 
-  module VarMaker = struct
-    let convert ?proc jvar = 
-      match proc with
-      | Some p ->
-          Var.of_string ~proc:(Var.mk_scope p) jvar
-      | None ->
-          Var.of_string jvar
-  end
-
   module JLoc2Loc = struct
     let parse name = 
       try
@@ -26,87 +17,43 @@ module JSON2Domain = struct
         |> LocParser.main LocLexer.token
       with Parsing.Parse_error -> failwith ("parsing failed: " ^ name) 
 
-    let convert ?proc jloc =
-      let name = String.sub jloc 3 ((String.length jloc) - 3) in
-      let yloc = parse name in
-      let res = Yloc.to_domain ?proc yloc in
+    let convert ?file ?proc ?ln jloc =
+      let yloc = parse jloc in
+      let res = Yloc.to_domain ?file ?proc ?ln yloc in
       res
   end
 
-  module JVal2AVS = struct
-    let convert ?proc (jval: Basic.json) =
+  module JVal2Val = struct
+    let convert ?file ?proc ?ln (jval: Basic.json) =
       let v = 
         (match jval with
-        | `Null ->
-            failwith "not supported type Null."
-        | `Bool b ->
-            failwith "not supported type bool."
-        | `Int i ->
-            Val.of_int (IInt.of_int i)
-        | `Float f ->
-            failwith "not supported type float."
         | `String s ->
-            if String.is_prefix s ~prefix:"<L>" then
-              let loc = JLoc2Loc.convert ?proc s in
-              Val.of_loc loc
-            else 
-              Val.of_str (SStr.of_string s)
-        | `Assoc assoc ->
-            failwith "not supported type assoc."
-        | `List l ->
-            failwith "not supported type list.")
+            JLoc2Loc.convert ?file ?proc ?ln s
+        | `Int i ->
+            JLoc2Loc.convert ?file ?proc ?ln (string_of_int i)
+        | _ ->
+            failwith (Format.asprintf "not supported type list: %s" (Basic.to_string jval)))
       in
-      AVS.singleton (v, Cst.cst_true)
-  end
-
-  module JEnv = struct
-    let convert ?proc json =
-      let jvars = Basic.Util.keys json in
-      (fun env jvar ->
-        let jloc = Basic.Util.to_string (Basic.Util.member jvar json) in
-        let var = VarMaker.convert ?proc jvar in
-        let loc = JLoc2Loc.convert ?proc jloc in
-        Env.add var loc env)
-      |> (fun f -> Caml.List.fold_left f Env.empty jvars)
+      Val.singleton (v, Cst.cst_true)
   end
 
   module JHeap = struct
-    let is_string avs =
-      let value, _ = AVS.min_elt avs in
-      Val.is_str value
-
-    let handle_string loc avs heap =
-      let value, _ = AVS.min_elt avs in
-      let str = Val.to_str value in
-      let chars = SStr.to_char_list str in
-      let heap', _ =
-        (fun (heap, i) c ->
-          let index = Loc.mk_index_of_int i in
-          let offset = Loc.mk_offset loc index in
-          (Heap.add offset (AVS.singleton (Val.of_char c, Cst.cst_true)) heap, i + 1))
-        |> (fun f -> Caml.List.fold_left f (heap, 0) chars)
-      in
-      heap'
-
-    let convert ?proc json =
+    let convert ?file ?proc ?ln json =
       let jval_list = Basic.Util.to_assoc json in
-      (fun heap (jloc, jval) ->
-        let loc = JLoc2Loc.convert ?proc jloc in
-        let avs = JVal2AVS.convert ?proc jval in
-        if is_string avs then
-          handle_string loc avs heap
-        else
-          Heap.add loc avs heap)
-      |> (fun f -> Caml.List.fold_left f Heap.empty jval_list)
+      Caml.List.fold_left 
+        (fun heap (jloc, jval) ->
+          heap |> (JVal2Val.convert ?file ?proc ?ln jval |> (JLoc2Loc.convert ?file ?proc ?ln jloc |> Heap.add)))
+        Heap.empty jval_list
   end
 
   module JCallLogs = struct
-    let convert ?proc json =
+    let convert ?file ?proc json =
       (fun jlog ->
-        let rloc = Basic.Util.member "rloc" jlog |> Basic.Util.to_string |> JLoc2Loc.convert ?proc in
+        let ln = Basic.Util.member "ln" jlog |> Basic.Util.to_string in
+        let rloc = Loc.mk_implicit (ln ^ ":ret") in
         let jfun = Basic.Util.member "jfun" jlog |> Basic.Util.to_string |> JNIFun.of_string in
-        let args = Basic.Util.member "args" jlog |> Basic.Util.convert_each (fun jarg -> Basic.Util.to_string jarg |> JLoc2Loc.convert ?proc) in
-        let heap = Basic.Util.member "heap" jlog |> JHeap.convert ?proc in
+        let args = Basic.Util.member "args" jlog |> Basic.Util.convert_each (fun jarg -> Basic.Util.to_string jarg |> JLoc2Loc.convert ?file ?proc ~ln) in
+        let heap = Basic.Util.member "heap" jlog |> JHeap.convert ?file ?proc ~ln in
         LogUnit.mk rloc jfun args heap)
       |> (fun f -> Basic.Util.convert_each f json)
       |> Caml.List.to_seq
@@ -115,10 +62,10 @@ module JSON2Domain = struct
 
   module JDomain = struct 
     let convert ?proc json = 
-      let env = Basic.Util.member "env" json in 
+      let file = Basic.Util.member "file" json |> Basic.Util.to_string in
       let heap = Basic.Util.member "heap" json in
       let logs = Basic.Util.member "logs" json in
-      {env = JEnv.convert ?proc env; heap = JHeap.convert ?proc heap; logs = JCallLogs.convert ?proc logs}
+      {heap = JHeap.convert ~file ?proc heap; logs = JCallLogs.convert ~file ?proc logs}
   end
 
   let sol_name = "result.sol"
@@ -148,35 +95,23 @@ let get_semantic_summary p =
   | None -> 
       None
 
-let leq_avs lhs_avs rhs_avs =
-  (fun (lhs_val, _) ->
-    (fun ((rhs_val: Val.t), _) ->
-      Val.(lhs_val <= rhs_val))
-    |> (fun f -> AVS.exists f rhs_avs))
-  |> (fun f -> AVS.for_all f lhs_avs)
+let leq_val lhs_val rhs_val =
+  (fun (lhs_loc, _) ->
+    (fun (rhs_loc, _) ->
+      Loc.(lhs_loc <= rhs_loc))
+    |> (fun f -> Val.exists f rhs_val))
+  |> (fun f -> Val.for_all f lhs_val)
     
-let leq_env lhs_env rhs_env =
-  (fun key value -> 
-    match Env.find_opt key rhs_env with
-    | Some value' -> 
-        if (Loc.compare value value') = 0 then
-          true
-        else
-          raise (NotMatched (Format.asprintf "Not matched loc of var %a: %a <> %a" Var.pp key Loc.pp value Loc.pp value'))
-    | None ->
-        raise (NotMatched (Format.asprintf "No Location of var: %a" Var.pp key)))
-  |> (fun f -> Env.for_all f lhs_env)
-
 let leq_heap lhs_heap rhs_heap =
-  (fun loc lhs_avs ->
+  (fun loc lhs_val ->
     match Heap.find_opt loc rhs_heap with
-    | Some rhs_avs ->
-        if leq_avs lhs_avs rhs_avs then
+    | Some rhs_val ->
+        if leq_val lhs_val rhs_val then
           true
         else
-          raise (NotMatched (Format.asprintf "%a is not included in %a" AVS.pp lhs_avs AVS.pp rhs_avs))
+          raise (NotMatched (Format.asprintf "%a is not included in %a\n==RES==\n%a\n==SOL==\n%a\n" Val.pp lhs_val Val.pp rhs_val Heap.pp rhs_heap Heap.pp lhs_heap))
     | None ->
-        raise (NotMatched (Format.asprintf "Not matched location: %a" Loc.pp loc)))
+        raise (NotMatched (Format.asprintf "Not matched location: %a in \n==RES==\n%a\n==SOL==\n%a\n" Loc.pp loc Heap.pp rhs_heap Heap.pp lhs_heap)))
   |> (fun f -> Heap.for_all f lhs_heap)
 
 let leq_unit: LogUnit.t -> LogUnit.t -> bool =
@@ -192,7 +127,6 @@ let leq_unit: LogUnit.t -> LogUnit.t -> bool =
       |> (fun f -> Caml.List.for_all2 f (lhs_rloc :: lhs_args) (rhs_rloc :: rhs_args)) &&
       leq_heap lhs_heap rhs_heap
 
-  
 let leq_logs lhs_logs rhs_logs =
   (fun lhs_log ->
     let matched_logs = CallLogs.find_all lhs_log.LogUnit.rloc rhs_logs in
@@ -202,9 +136,7 @@ let leq_logs lhs_logs rhs_logs =
       CallLogs.exists (fun rhs_log -> leq_unit lhs_log rhs_log) matched_logs)
   |> (fun f -> CallLogs.for_all f lhs_logs)
 
-
-let leq_dom {env=lhs_env; heap=lhs_heap; logs=lhs_logs} {env=rhs_env; heap=rhs_heap; logs=rhs_logs} =
-    leq_env lhs_env rhs_env &&
+let leq_dom {heap=lhs_heap; logs=lhs_logs} {heap=rhs_heap; logs=rhs_logs} =
     leq_heap lhs_heap rhs_heap &&
     leq_logs lhs_logs rhs_logs
 
@@ -227,7 +159,7 @@ let tests = "test suite for c-summary analyer" >::: [
           try
             assert_equal (leq_dom sol s) true ~msg
           with NotMatched err ->
-            assert_failure (err ^ "\n" ^ msg)))
+            assert_failure err))
     |> (fun f -> Caml.List.iter f @@ Caml.List.filter (fun p -> not(JniModel.is_jni p)) procs))
 ]
 

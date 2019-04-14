@@ -1,8 +1,10 @@
-%token <int> INDEX
-%token <string> FIELD
-%token <string> CONST
-%token <string> DYN
-%token PTR RET
+%token <string> EX
+%token <string> IM
+%token <string> GB
+%token <string> FN
+%token <string> CONST_STRING
+%token <int> CONST_INT
+%token PTR RET AT
 %token LPAREN RPAREN 
 %token EOL
 %type <Yloc.t> main
@@ -14,12 +16,12 @@ main:
   ;
 loc:
   | RET { Yloc.mk_ret () }
-  | CONST { Yloc.mk_const $1 }
-  | DYN { Yloc.mk_dyn $1 }
+  | EX { Yloc.mk_ex $1 }
+  | IM { Yloc.mk_im $1 }
+  | GB { Yloc.mk_gb $1 }
+  | FN { Yloc.mk_fn $1 }
   | LPAREN loc RPAREN { $2 }
   | PTR loc { Yloc.mk_pointer $2 }
-  | loc index { Yloc.mk_offset $1 $2 }
-  ;
-index:
-  | INDEX { Yloc.mk_index_of_int $1 }
-  | FIELD { Yloc.mk_index_of_string $1 }
+  | loc AT loc { Yloc.mk_offset $1 $3 }
+  | CONST_STRING { Yloc.mk_const_of_string $1 }
+  | CONST_INT { Yloc.mk_const_of_int $1 }

@@ -8,11 +8,14 @@
 
 rule token = parse
 | [' ' '\t'] { token lexbuf }
-| '@' ['0'-'9']+ as lxm { let name = String.sub lxm 1 ((String.length lxm) - 1 ) in INDEX (int_of_string name) }
 | "ret" { RET }
-| "loc_" ['a'-'z''A'-'Z''0'-'9''_''$']+ as lxm { let name = String.sub lxm 4 ((String.length lxm) - 4) in CONST name}
-| "dyn_" _+ as lxm { let name = String.sub lxm 4 ((String.length lxm) - 4) in DYN name}
-| '@' ['a'-'z''A'-'Z''_'] ['a'-'z''A'-'Z''0'-'9''_']+ as lxm { let name = String.sub lxm 1 ((String.length lxm) - 1 ) in FIELD name}
+| "ex_" ['#''a'-'z''A'-'Z''0'-'9''_''$']+ as lxm { let name = String.sub lxm 3 ((String.length lxm) - 3) in EX name}
+| "im_" _+ as lxm { let name = String.sub lxm 3 ((String.length lxm) - 3) in IM name}
+| "gb_" ['#''a'-'z''A'-'Z''0'-'9''_''$''.']+ as lxm { let name = String.sub lxm 3 ((String.length lxm) - 3) in GB name}
+| "fn_" ['a'-'z''A'-'Z''0'-'9''_']+ as lxm { let name = String.sub lxm 3 ((String.length lxm) - 3) in FN name}
+| '\''[^'\'']+'\'' as lxm { let name = Str.global_replace (Str.regexp_string "'") "" lxm in CONST_STRING name }
+| ['0'-'9']+ as lxm { CONST_INT (int_of_string lxm) }
+| '@' {AT}
 | '(' {LPAREN}
 | ')' {RPAREN}
 | '*' {PTR}
