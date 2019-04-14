@@ -71,23 +71,6 @@ module TypMap = struct
   let pp = pp ~pp_value: LocSet.pp
 end
 
-module GlobalEnv = struct
-  let get_glob_pvars () = 
-    let globals = PreForGlobal.Storage.load () in
-    PreForGlobal.NameType.fold
-      (fun pvar typ res -> (pvar, typ) :: res)
-      globals []
-
-  let get_glob_vars () = 
-    Caml.List.fold_right 
-      (fun (pvar, typ) res -> (Var.of_pvar pvar, typ) :: res)
-      (get_glob_pvars ()) []
-
-  let get_all_procs () = Procedures.get_all () 
-end
-
-let is_struct = Typ.is_cpp_class
-
 module CFG = ProcCfg.NormalOneInstrPerNode
 
 module TransferFunctions = struct
@@ -184,42 +167,56 @@ module TransferFunctions = struct
         Val.singleton (Loc.mk_const_of_int 1, Cst.cst_true)
         (* AVS.singleton (Val.of_int (Int.top), Cst.cst_true) *)
 
-    let calc_args scope location heap args =
-      Caml.List.fold_left
-        (fun vlist ((arg: Exp.t), _) -> (
-          match arg with
-          | Lvar pvar when Pvar.is_global pvar (*when Pvar.is_compile_constant pvar || Pvar.is_ice pvar*) -> (
-            match Pvar.get_initializer_pname pvar with
-            | Some callee_pname -> (
-                match get_proc_summary callee_pname with
-                | Some ({heap=end_heap}) ->
-                    let rhs_addr = Loc.of_pvar pvar in
-                    let rhs_v = Heap.find rhs_addr end_heap in
-                    rhs_v :: vlist
-                | None ->
-                    let () = L.progress "Does not exist summary: %s\n@." (Typ.Procname.to_string callee_pname) in
-                    Val.empty :: vlist) 
-            | None ->
-                let () = L.progress "Does not exist initializer: %a\n@."  (Pvar.pp Pp.text) pvar in
-                Val.empty :: vlist)
-          | _ ->
-              exec_expr scope location heap arg :: vlist))
-        [] args
-      |> Caml.List.rev 
+    let calc_args tenv scope location heap args =
+      let heap', args_rev_v = Caml.List.fold_left
+          (fun (h, vlist) ((arg: Exp.t), _) -> (
+            match arg with
+            | Lvar pvar when Pvar.is_global pvar (*when Pvar.is_compile_constant pvar || Pvar.is_ice pvar*) -> (
+                match Pvar.get_initializer_pname pvar with
+                | Some callee_pname -> (
+                    match Ondemand.get_proc_desc callee_pname with 
+                    | Some callee_desc -> ((* no exisiting function: because of functions Infer made *)
+                        match get_proc_summary callee_pname with
+                        | Some ({heap=end_heap}) ->
+                            let rhs_v = Val.singleton (Loc.of_pvar pvar, Cst.cst_true) in
+                            let ienv = Instantiation.mk_ienv tenv scope callee_desc [rhs_v] end_heap h in
+                            let h' = Instantiation.comp_heap h h end_heap ienv in
+                            let () = L.progress "==> %a\n@." Heap.pp h' in
+                            h', rhs_v :: vlist
+                        | None ->
+                            let () = L.progress "Does not exist summary: %s\n@." (Typ.Procname.to_string callee_pname) in
+                            h, Val.empty :: vlist)
+                  | None ->
+                      let () = L.progress "Does not exist proc descriptor: %s\n@." (Typ.Procname.to_string callee_pname) in
+                      h, Val.empty :: vlist)
+              | None -> 
+                  let () = L.progress "Does not exist proc descriptor: %a\n@." (Pvar.pp Pp.text) pvar in
+                  h, Val.empty :: vlist)
+            | _ ->
+                h, exec_expr scope location heap arg :: vlist))
+          (heap, []) args
+      in
+      let args_v = Caml.List.rev args_rev_v in
+      let globs_v = GlobalEnv.get_glob_pvars () 
+          |> Caml.List.fold_left (fun vlist (glob, _) -> (Heap.find (Loc.of_pvar glob) heap) :: vlist) []
+          |> Caml.List.rev
+      in
+      heap', globs_v @ args_v
 
   let exec_instr : Domain.t -> extras ProcData.t -> CFG.Node.t -> Sil.instr -> Domain.t = 
     fun {heap; logs} {pdesc; tenv; extras} node instr ->
       let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in
-      let scope = Var.mk_scope (Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc) in
+      let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
+      let scope = Var.mk_scope proc_name in
       match instr with
-      | Load (id, Exp.Lvar pvar, typ, loc) when Pvar.is_compile_constant pvar || Pvar.is_ice pvar -> (
+      | Load (id, Exp.Lvar pvar, typ, loc) when Pvar.is_global pvar -> (
           let lhs_addr = Loc.of_id ~proc:scope id in
           match Pvar.get_initializer_pname pvar with
           | Some callee_pname -> (
               match get_proc_summary callee_pname with
               | Some ({heap=end_heap}) ->
                   let rhs_addr = Loc.of_pvar pvar in
-                  let rhs_v = Heap.find rhs_addr end_heap in
+                  let rhs_v = Heap.find rhs_addr end_heap in (* TODO: merge global values *)
                   let heap' = Heap.add lhs_addr (Helper.load rhs_v end_heap) heap in
                   mk_domain heap' logs
               | None ->
@@ -255,51 +252,50 @@ module TransferFunctions = struct
           in
           let jnifun = JNIFun.of_procname callee_pname in
           let arg_index = ref (Caml.List.length args) in
-          let dumped_heap, arg_addrs = 
+          let dumped_heap, arg_addrs = Caml.List.fold_right 
             (fun (arg_expr, _) (dumped_heap, arg_addrs) ->
               let () = (arg_index := !arg_index - 1) in
-              let arg_name = (Location.to_string loc) ^ ":arg" |> Ident.string_to_name in
-              let arg_id = Ident.create_normal arg_name !arg_index in
-              let arg_addr = Loc.of_id arg_id ~proc:scope in
+              let arg_name = (Location.to_string loc) ^ ":arg" ^ (string_of_int !arg_index) in
+              let arg_addr = Loc.mk_implicit arg_name in
               let arg_v = exec_expr scope loc dumped_heap arg_expr in
-              (Heap.add arg_addr arg_v heap', arg_addr :: arg_addrs))
-            |> (fun f -> Caml.List.fold_right f args (heap', []))
+              (Heap.add arg_addr arg_v dumped_heap, arg_addr :: arg_addrs))
+            args (heap', [])
           in
           let log = LogUnit.mk ret_addr jnifun arg_addrs dumped_heap in
           let logs' = CallLogs.add log logs in  
           mk_domain heap' logs'
       | Call ((id, ret_typ), (Const (Cfun callee_pname)), args, loc, flag) -> 
           let lhs_addr = Loc.of_id ~proc:scope id in
-          let heap' = Heap.optimize heap in
           (match Ondemand.get_proc_desc callee_pname with 
           | Some callee_desc -> (* no exisiting function: because of functions Infer made *)
               (match get_proc_summary ~caller:pdesc callee_pname with
               | Some ({ heap = end_heap; logs = end_logs }) ->
-                let args_v = calc_args scope loc heap' args in(* Caml.List.fold_right (fun (e, _) v -> exec_expr scope loc heap' e :: v) args [] in *)
-                let ienv = Instantiation.mk_ienv tenv callee_desc args_v end_heap heap' in
-                let heap'' = Instantiation.comp_heap heap' heap' end_heap ienv in
-                let logs' = Instantiation.comp_log logs end_logs heap'' ienv in
+                let heap' = Heap.optimize ~scope heap in
+                let heap'', args_v = calc_args tenv scope loc heap' args in
+                let ienv = Instantiation.mk_ienv tenv scope callee_desc args_v end_heap heap'' in
+                let heap''' = Instantiation.comp_heap heap'' heap'' end_heap ienv in
+                let logs' = Instantiation.comp_log logs end_logs heap''' ienv in
                 let ret_addr = Loc.mk_ret_of_pname callee_pname in
-                let heap''' = 
-                  (match Heap.find_opt ret_addr heap'' with
+                let heap'''' = 
+                  (match Heap.find_opt ret_addr heap''' with
                   | Some v -> 
-                      Heap.add lhs_addr v heap''
+                      Heap.add lhs_addr v heap'''
                   | None -> (* kind of passing parameter as a return value *)
                       let ret_param_addr = Var.of_string "__return_param" ~proc:scope |> Loc.mk_explicit in
-                      (match Heap.find_opt ret_param_addr heap'' with
+                      (match Heap.find_opt ret_param_addr heap''' with
                       | Some v ->
-                          Heap.add lhs_addr v heap''
+                          Heap.add lhs_addr v heap'''
                       | None ->
-                          Heap.add lhs_addr (Val.singleton (Loc.mk_implicit (Location.to_string loc), Cst.cst_true)) heap''))
+                          Heap.add lhs_addr (Val.singleton (Loc.mk_implicit (Location.to_string loc), Cst.cst_true)) heap'''))
                 in
-                mk_domain heap''' logs'
+                mk_domain heap'''' logs'
               | None -> 
                   let () = L.progress "Not existing callee. Just ignore this call.\n@." in
-                  mk_domain heap' logs
+                  mk_domain heap logs
                   )
           | None -> 
               let () = L.progress "Not existing callee. Just ignore this call.\n@." in
-              mk_domain heap' logs)
+              mk_domain heap logs)
       | Call _ ->
           let () = L.progress "Not support function pointers\n@." in
           mk_domain heap logs
@@ -442,7 +438,7 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         let proc_data = ProcData.make_default proc_desc tenv in 
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
-          let opt_astate = Domain.optimize p ~f_name:(Typ.Procname.to_string proc_name) in
+          let opt_astate = Domain.optimize p ~scope:(Var.mk_scope (Typ.Procname.to_string proc_name)) in
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
           let summ' = {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some opt_astate}; Summary.proc_desc = proc_desc; Summary.sessions = ref session} in
           Summary.store summ'; 

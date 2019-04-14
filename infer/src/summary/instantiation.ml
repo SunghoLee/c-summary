@@ -14,24 +14,30 @@ let fun_params pdesc =
     let args = attrs.formals in
     Caml.List.map (fun (m, typ) -> ((Var.of_string (Mangled.to_string m) ~proc:scope), typ)) args
 
-let rec fp_mk_ienv callee_heap caller_heap ienv =
-  let expand ((loc: Loc.t), _) ienv =
+let rec fp_mk_ienv caller_scope callee_heap caller_heap ienv =
+  let rec expand ((loc: Loc.t), _) ienv =
     match loc with
     | Offset (base, index) ->
-        let ins_base = InstEnv.find base ienv in
-        let ins_index = InstEnv.find index ienv in
+        let ienv' = expand (base, Cst.cst_true) ienv |> expand (index, Cst.cst_true) in
+        let ins_base = InstEnv.find base ienv' in
+        let ins_index = InstEnv.find index ienv' in
         Helper.(ins_base * ins_index) 
         |> Caml.List.fold_left (fun ienv ((b, b_cst), (i, i_cst)) -> 
-            InstEnv.add loc (Val.singleton (Loc.mk_offset b i, Cst.cst_and b_cst i_cst)) ienv) ienv
+            InstEnv.add loc (Val.singleton (Loc.mk_offset b i, Cst.cst_and b_cst i_cst)) ienv) ienv'
     | Pointer base ->
-        let ins_base = InstEnv.find base ienv in
-        (fun (b, cst) ienv ->
-          (match Heap.find_opt b caller_heap with
-          | Some v ->
-              InstEnv.add loc Helper.(v ^ cst) ienv
-          | None ->
-              ienv))
-        |> (fun f -> Val.fold f ins_base ienv)
+        let ienv' = expand (base, Cst.cst_true) ienv in
+        let ins_base = InstEnv.find base ienv' in
+        Val.fold 
+          (fun (b, cst) ienv ->
+            (match Heap.find_opt b caller_heap with
+            | Some v ->
+                InstEnv.add loc Helper.(v ^ cst) ienv
+            | None ->
+                if Loc.is_in caller_scope b || Loc.is_in Var.glob_scope b then
+                  let ptr = Loc.mk_pointer b in
+                  InstEnv.add loc (Val.singleton (ptr, cst)) ienv
+                else ienv))
+          ins_base ienv'
     | _ -> 
         ienv
   in
@@ -40,12 +46,14 @@ let rec fp_mk_ienv callee_heap caller_heap ienv =
   if InstEnv.equal (fun a b -> Val.equal a b) ienv ienv' then
     ienv
   else
-    fp_mk_ienv callee_heap caller_heap ienv'
+    fp_mk_ienv caller_scope callee_heap caller_heap ienv'
 
 (* construct an instantiation environment at call sites. *)
-let mk_ienv tenv pdesc args callee_heap caller_heap = 
-  let params = fun_params pdesc 
-    |> Caml.List.map (fun (param, typ) -> (Loc.mk_explicit param), Typ.mk (Tptr (typ, Pk_pointer)))
+let mk_ienv tenv caller_scope pdesc args callee_heap caller_heap = 
+  let params = (GlobalEnv.get_glob_pvars () 
+      |> Caml.List.map (fun (glob, typ) -> (Loc.of_pvar glob), Typ.mk (Tptr (typ, Pk_pointer))))
+    @ (fun_params pdesc 
+      |> Caml.List.map (fun (param, typ) -> (Loc.mk_explicit param), Typ.mk (Tptr (typ, Pk_pointer))))
   in
   let heap' = Caml.List.fold_left2
     (fun heap (param, typ) arg -> Heap.add param arg heap)
@@ -55,8 +63,8 @@ let mk_ienv tenv pdesc args callee_heap caller_heap =
     (fun ienv (loc, typ) -> InstEnv.add loc (Val.singleton (loc, Cst.cst_true)) ienv)
     InstEnv.empty params
   in
-  let res = fp_mk_ienv callee_heap heap' ienv in
-  let () = L.progress "%a\n@." InstEnv.pp res in
+  let res = fp_mk_ienv caller_scope callee_heap heap' ienv |> InstEnv.optimize in
+  let () = L.progress "IENV: %a\n@." InstEnv.pp res in
   res
 
 (* instantiate a constraint *)
@@ -114,8 +122,9 @@ let comp_heap base caller callee ienv =
 let comp_log base callee_logs caller_heap ienv = 
   let f = fun log base ->
     let heap' = 
-      comp_heap Heap.empty caller_heap (LogUnit.get_heap log) ienv 
+      comp_heap caller_heap caller_heap (LogUnit.get_heap log) ienv 
     in
-    CallLogs.add (LogUnit.update_heap heap' log) base
+    let log' = LogUnit.optimize (LogUnit.update_heap heap' log) in
+    CallLogs.add log' base
   in
   CallLogs.fold f callee_logs base 

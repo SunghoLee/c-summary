@@ -26,6 +26,12 @@ module Var = struct
 
   let glob_scope = GB
 
+  let scope_to_string = function
+    | GB -> "global"
+    | Proc p -> p
+
+  let is_in scope {proc} = proc = scope
+
   let of_string ?(proc=GB) s =
     if String.is_prefix s ~prefix:"#GB" then
       {name = s; proc = proc; kind = Global}
@@ -131,6 +137,23 @@ module Loc = struct
   let of_id ?proc id = Var.of_id ?proc id |> mk_explicit
 
   let of_pvar ?proc pvar = Var.of_pvar ?proc pvar |> mk_explicit
+
+  let rec is_in scope loc =
+    match loc with
+    | Explicit var ->
+        Var.is_in scope var 
+    | Implicit _ ->
+        true
+    | Const _ ->
+        true
+    | Pointer t ->
+        is_in scope t
+    | FunPointer _ ->
+        true
+    | Offset (b, i) ->
+        is_in scope b
+    | Ret s ->
+        (Var.scope_to_string scope) = s
 
   let rec leq_const lhs rhs =
     match lhs, rhs with
@@ -273,7 +296,7 @@ module Cst = struct
       fun ctxt loc ->
         let sort = Arithmetic.Integer.mk_sort ctxt in
         match loc with
-        | Explicit _ ->
+        | Explicit _ | Implicit _ | Const _ ->
             (index := !index + 1; (Expr.mk_numeral_int ctxt (get_index loc) sort))
         | _ ->
             (index := !index + 1; (Expr.mk_const ctxt (Symbol.mk_int ctxt !index) sort))
@@ -441,6 +464,13 @@ module InstEnv = struct
         add loc avs ienv
 
   let pp = pp ~pp_value: Val.pp
+
+  let optimize ienv =
+    fold 
+      (fun loc v ienv ->
+        let v' = Val.optimize v in
+        if Val.is_empty v' then ienv else add loc v' ienv)
+      ienv empty
 end
 
 module Heap = struct
@@ -475,8 +505,8 @@ module Heap = struct
     | Some v ->
         v
     | None ->
-        Val.empty
-        (*Val.singleton (Loc.mk_pointer l, Cst.cst_true)*)
+        Val.singleton (Loc.mk_pointer l, Cst.cst_true)
+        (*Val.empty*)
 
   let ( <= ) lhs rhs =
     let f = fun key val1 ->
@@ -508,19 +538,25 @@ module Heap = struct
     in
     fold opt_v_heap heap empty
 
-  let optimize ?flocs heap = 
-    let heap' = opt_cst_in_heap heap in
+  let optimize ?scope ?flocs heap = 
+    let is_seed = 
+      match scope with
+      | Some p ->
+          Loc.is_in p
+      | None ->
+          fun (loc: Loc.t) -> match loc with Explicit _ -> true | _ -> false
+    in
     let locs = (
       match flocs with
       | Some s ->
           s
       | None -> 
-          fold (fun loc _ ls -> match loc with Explicit _ -> loc::ls | _ -> ls) heap' [])
+          fold (fun loc _ ls -> if is_seed loc then loc :: ls else ls) heap [])
     in
     let rec calc_closure locset loc =
-      let locset' = find_offsets_of loc heap' in
+      let locset' = find_offsets_of loc heap in
       let locset'' = 
-        (match find_opt loc heap' with
+        (match find_opt loc heap with
         | Some v ->
             Val.fold (fun (l,_) ls -> LocSet.add l ls) v locset'
         | None ->
@@ -531,9 +567,12 @@ module Heap = struct
       |> LocSet.union locset
     in
     let loc_closure = Caml.List.fold_left calc_closure LocSet.empty locs in
-    filter (fun loc _ -> LocSet.mem loc loc_closure) heap'
+    filter (fun loc _ -> LocSet.mem loc loc_closure) heap 
+    |> opt_cst_in_heap
+
 
   let join lhs rhs = 
+    (* TODO: need to revise this for performance *)
     let lhs' = opt_cst_in_heap lhs in
     let rhs' = opt_cst_in_heap rhs in
     union (fun key val1 val2 -> Some (Val.join val1 val2)) lhs' rhs'
@@ -596,7 +635,7 @@ module CallLogs = struct
 
   let join = union
 
-  let optimize logs = map LogUnit.optimize logs
+  let optimize ?scope logs = map LogUnit.optimize logs
 
   let find_all ret logs = 
     (fun log -> (Loc.compare ret log.LogUnit.rloc) = 0)
@@ -636,38 +675,42 @@ module Domain = struct
   let update_logs logs' s = { s with logs = logs' }
 
   let ( <= ) ~lhs ~rhs = 
-    Heap.( lhs.heap <= rhs.heap ) 
-    && CallLogs.( lhs.logs <= rhs.logs )
+    let () = L.progress "Start Domain comparison...\n@." in
+    let res = Heap.( lhs.heap <= rhs.heap ) 
+    && CallLogs.( lhs.logs <= rhs.logs ) in
+    let () = L.progress "End Domain comparison...\n@." in
+    res
 
   let join lhs rhs = 
-    { heap = ( Heap.join lhs.heap rhs.heap )
-    ; logs = ( CallLogs.join lhs.logs rhs.logs ) }
+    let () = L.progress "Start Domain join...\n@." in
+    let res = { heap = ( Heap.join lhs.heap rhs.heap )
+    ; logs = ( CallLogs.join lhs.logs rhs.logs ) } in
+    let () = L.progress "End Domain join...\n@." in
+    res
 
   let widen ~prev ~next ~num_iters = 
-    let () = L.progress "PRE: %a\n NEXT: %a\n@." Heap.pp prev.heap Heap.pp next.heap in
     if num_iters >= widen_iter then
-      let () = L.progress "WIDENING: %d\n@." num_iters in
       (* TODO: need to widen for loop statements *)
       { heap = Heap.widen ~prev:prev.heap ~next:next.heap
       ; logs = CallLogs.widen ~prev:prev.logs ~next:next.logs }
     else 
       join prev next 
 
-  let rm_redundant ?f_name {heap; logs} = 
+  let rm_redundant ?scope {heap; logs} = 
     let non_temp_locs = 
-      (match f_name with
+      (match scope with
       | Some f -> 
-          [Loc.mk_ret f]
+          [Loc.mk_ret (Var.scope_to_string f)]
           |> Heap.fold (fun loc _ loclist -> if Loc.is_explicit loc then loc::loclist else loclist) heap
       | None ->
           Heap.fold (fun loc _ loclist -> if Loc.is_explicit loc then loc::loclist else loclist) heap [])
     in
-    let heap' = Heap.optimize heap ~flocs:non_temp_locs in
-    let logs' = CallLogs.optimize logs in
+    let heap' = Heap.optimize heap ~flocs:non_temp_locs ?scope in
+    let logs' = CallLogs.optimize ?scope logs in
     make heap' logs'
 
-  let optimize ?f_name astate = 
-    rm_redundant astate ?f_name
+  let optimize ?scope astate = 
+    rm_redundant astate ?scope
 
   let pp fmt { heap; logs } =
     F.fprintf fmt "===\n%a\n%a\n===" Heap.pp heap CallLogs.pp logs
