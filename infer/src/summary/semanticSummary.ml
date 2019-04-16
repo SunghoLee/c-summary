@@ -82,6 +82,17 @@ module TransferFunctions = struct
 
   type extras = ProcData.no_extras
 
+  let fun_params pdesc =
+  (*  if GlobalEnv.is_global_var_init_fun pdesc then
+      let (pvar, typ) = GlobalEnv.get_initialized_global_ext pdesc in
+      let holder, htyp = GlobalEnv.get_holder_var pdesc typ in
+      [ holder, htyp ]
+    else *)
+      let attrs = Procdesc.get_attributes pdesc in
+      let scope = Var.mk_scope (Typ.Procname.to_string (Procdesc.get_proc_name pdesc)) in
+      let args = attrs.formals in
+      Caml.List.map (fun (m, typ) -> ((Var.of_string (Mangled.to_string m) ~proc:scope), typ)) args
+
   let opt_heap_every_stmt = false
 
   let mk_domain heap logs = 
@@ -179,9 +190,7 @@ module TransferFunctions = struct
                         match get_proc_summary callee_pname with
                         | Some ({heap=end_heap}) ->
                             let rhs_v = Val.singleton (Loc.of_pvar pvar, Cst.cst_true) in
-                            let ienv = Instantiation.mk_ienv tenv scope callee_desc [rhs_v] end_heap h in
-                            let h' = Instantiation.comp_heap h h end_heap ienv in
-                            let () = L.progress "==> %a\n@." Heap.pp h' in
+                            let h' = Heap.union (fun l v1 v2 -> Some (Val.union v1 v2)) heap end_heap in
                             h', rhs_v :: vlist
                         | None ->
                             let () = L.progress "Does not exist summary: %s\n@." (Typ.Procname.to_string callee_pname) in
@@ -215,10 +224,11 @@ module TransferFunctions = struct
           | Some callee_pname -> (
               match get_proc_summary callee_pname with
               | Some ({heap=end_heap}) ->
+                  let heap' = Heap.union (fun l v1 v2 -> Some (Val.union v1 v2)) heap end_heap in
                   let rhs_addr = Loc.of_pvar pvar in
-                  let rhs_v = Heap.find rhs_addr end_heap in (* TODO: merge global values *)
-                  let heap' = Heap.add lhs_addr (Helper.load rhs_v end_heap) heap in
-                  mk_domain heap' logs
+                  let rhs_v = Heap.find rhs_addr heap' in (* TODO: merge global values *)
+                  let heap'' = Heap.add lhs_addr (Helper.load rhs_v heap') heap' in
+                  mk_domain heap'' logs
               | None ->
                   let () = L.progress "Does not exist summary: %s\n@." (Typ.Procname.to_string callee_pname) in
                   mk_domain heap logs) 
@@ -272,7 +282,7 @@ module TransferFunctions = struct
               | Some ({ heap = end_heap; logs = end_logs }) ->
                 let heap' = Heap.optimize ~scope heap in
                 let heap'', args_v = calc_args tenv scope loc heap' args in
-                let ienv = Instantiation.mk_ienv tenv scope callee_desc args_v end_heap heap'' in
+                let ienv = Instantiation.mk_ienv tenv scope (fun_params callee_desc) args_v end_heap heap'' in
                 let heap''' = Instantiation.comp_heap heap'' heap'' end_heap ienv in
                 let logs' = Instantiation.comp_log logs end_logs heap''' ienv in
                 let ret_addr = Loc.mk_ret_of_pname callee_pname in
@@ -416,9 +426,13 @@ module Initializer = struct
       (Procdesc.get_formals pdesc)) 
       @ (GlobalEnv.get_glob_vars ())
     in
-    let local_vars = Caml.List.map
-      (fun (var: ProcAttributes.var_data) -> Var.of_string (Mangled.to_string var.name) ~proc:scope, var.typ)
-      (Procdesc.get_locals pdesc)
+    let local_vars = 
+      if GlobalEnv.is_global_var_init_fun pdesc then
+        [GlobalEnv.get_initialized_global_ext pdesc |> (fun (pvar, typ) -> Var.of_pvar pvar, typ)]
+      else
+        Caml.List.map
+        (fun (var: ProcAttributes.var_data) -> Var.of_string (Mangled.to_string var.name) ~proc:scope, var.typ)
+        (Procdesc.get_locals pdesc)
     in
     let locs_arg, locs_loc = 
       (fun (var, typ) -> Loc.mk_explicit var, Typ.mk (Tptr (typ, Pk_pointer)))

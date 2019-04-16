@@ -7,13 +7,6 @@ open SemanticSummaryDomain
 open Pervasives
 open SUtils
 
-(* return variables defined as parameters *)
-let fun_params pdesc =
-    let attrs = Procdesc.get_attributes pdesc in
-    let scope = Var.mk_scope (Typ.Procname.to_string (Procdesc.get_proc_name pdesc)) in
-    let args = attrs.formals in
-    Caml.List.map (fun (m, typ) -> ((Var.of_string (Mangled.to_string m) ~proc:scope), typ)) args
-
 let rec fp_mk_ienv caller_scope callee_heap caller_heap ienv =
   let rec expand ((loc: Loc.t), _) ienv =
     match loc with
@@ -49,19 +42,18 @@ let rec fp_mk_ienv caller_scope callee_heap caller_heap ienv =
     fp_mk_ienv caller_scope callee_heap caller_heap ienv'
 
 (* construct an instantiation environment at call sites. *)
-let mk_ienv tenv caller_scope pdesc args callee_heap caller_heap = 
-  let params = (GlobalEnv.get_glob_pvars () 
+let mk_ienv tenv caller_scope params args callee_heap caller_heap = 
+  let all_params = (GlobalEnv.get_glob_pvars () 
       |> Caml.List.map (fun (glob, typ) -> (Loc.of_pvar glob), Typ.mk (Tptr (typ, Pk_pointer))))
-    @ (fun_params pdesc 
-      |> Caml.List.map (fun (param, typ) -> (Loc.mk_explicit param), Typ.mk (Tptr (typ, Pk_pointer))))
+    @ Caml.List.map (fun (param, typ) -> (Loc.mk_explicit param), Typ.mk (Tptr (typ, Pk_pointer))) params
   in
   let heap' = Caml.List.fold_left2
     (fun heap (param, typ) arg -> Heap.add param arg heap)
-    caller_heap params args
+    caller_heap all_params args
   in
   let ienv = Caml.List.fold_left
     (fun ienv (loc, typ) -> InstEnv.add loc (Val.singleton (loc, Cst.cst_true)) ienv)
-    InstEnv.empty params
+    InstEnv.empty all_params
   in
   let res = fp_mk_ienv caller_scope callee_heap heap' ienv |> InstEnv.optimize in
   let () = L.progress "IENV: %a\n@." InstEnv.pp res in

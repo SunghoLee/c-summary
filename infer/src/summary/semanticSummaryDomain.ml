@@ -497,8 +497,9 @@ module Heap = struct
   |> (fun f -> fold f heap LocSet.empty)
 
   let find_offsets_of l heap =
-    (fun (loc: Loc.t) -> match loc with Offset (base, _) -> base = l | _ -> false)
-    |> (fun f -> LocSet.filter f (flatten_heap_locs heap))
+    LocSet.filter  
+      (fun (loc: Loc.t) -> match loc with Offset (base, _) -> base = l | _ -> false)
+      (flatten_heap_locs heap)
 
   let find l heap =
     match find_opt l heap with
@@ -675,18 +676,12 @@ module Domain = struct
   let update_logs logs' s = { s with logs = logs' }
 
   let ( <= ) ~lhs ~rhs = 
-    let () = L.progress "Start Domain comparison...\n@." in
-    let res = Heap.( lhs.heap <= rhs.heap ) 
-    && CallLogs.( lhs.logs <= rhs.logs ) in
-    let () = L.progress "End Domain comparison...\n@." in
-    res
+    Heap.( lhs.heap <= rhs.heap ) 
+    && CallLogs.( lhs.logs <= rhs.logs )
 
   let join lhs rhs = 
-    let () = L.progress "Start Domain join...\n@." in
-    let res = { heap = ( Heap.join lhs.heap rhs.heap )
-    ; logs = ( CallLogs.join lhs.logs rhs.logs ) } in
-    let () = L.progress "End Domain join...\n@." in
-    res
+    { heap = ( Heap.join lhs.heap rhs.heap )
+    ; logs = ( CallLogs.join lhs.logs rhs.logs ) }
 
   let widen ~prev ~next ~num_iters = 
     if num_iters >= widen_iter then
