@@ -83,16 +83,21 @@ let get_all_procs () =
   InferBase.ResultsDir.assert_results_dir "";
   Procedures.get_all (fun x y -> true) () 
   
-let get_semantic_summary p =
-  let summ = Summary.get p in 
-  match summ with
-  | Some s ->(
-    match s.Summary.payloads.Payloads.semantic_summary with
-    | Some _ as o -> 
-        o
+let get_semantic_summary f =
+  let proc_opt = get_all_procs () |> Caml.List.find_opt (fun p -> (InferIR.Typ.Procname.to_string p) = f) in
+  match proc_opt with
+  | Some p ->(
+    let summ = Summary.get p in 
+    match summ with
+    | Some s ->(
+      match s.Summary.payloads.Payloads.semantic_summary with
+      | Some _ as o -> 
+          o
+      | None -> 
+          None)
     | None -> 
         None)
-  | None -> 
+  | None ->
       None
 
 let leq_val lhs_val rhs_val =
@@ -146,21 +151,20 @@ let tests = "test suite for c-summary analyer" >::: [
     let json = JSON2Domain.load () in
     (fun proc ->
       let summ = get_semantic_summary proc in
-      let proc_name = InferIR.Typ.Procname.to_string proc in
-      let proc_json = JSON2Domain.get_jdomain proc_name json in
+      let proc_json = JSON2Domain.get_jdomain proc json in
       (match summ, proc_json with
-      | _, `Null ->
-          let msg = Format.asprintf "No solution for %s\n" proc_name in
+      | None, _ ->
+          let msg = Format.asprintf "No result for %s\n" proc in
           (* Only match function results described in the solution: just ignore this case *)
-          assert_equal true true ~msg
+          assert_failure msg
       | Some s, _ ->
-          let sol = JSON2Domain.to_domain ~proc:proc_name proc_json in
+          let sol = JSON2Domain.to_domain ~proc:proc proc_json in
           let msg = Format.asprintf "Failed to compare\n#Res\n%a\n\n#Sol\n%a\n" Domain.pp s Domain.pp sol in
           try
             assert_equal (leq_dom sol s) true ~msg
           with NotMatched err ->
             assert_failure err))
-    |> (fun f -> Caml.List.iter f @@ Caml.List.filter (fun p -> not(JniModel.is_jni p)) procs))
+    |> (fun f -> Caml.List.iter f @@ JSON2Domain.get_funs json))
 ]
 
 let _ = run_test_tt_main tests
