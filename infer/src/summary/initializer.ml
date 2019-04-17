@@ -94,52 +94,58 @@ let mk_tmap loc_typs tenv tmap =
           failwith (F.asprintf "not support type: %a: %a." Loc.pp loc (Typ.pp_full Pp.text) typ)
   in
   Caml.List.fold_right f loc_typs tmap
-
-let init_heap loc_typs tenv heap tmap =
+let init_heap loc_typs tenv heap tmap = (* loc_types: local list *)
   let is_gt l1 l2 = (Loc.compare l1 l2) = 1 in
   let pos_aliases addr typ tmap = TypMap.find typ tmap ~default:LocSet.empty
     |> LocSet.filter (fun x -> is_gt addr x && (Loc.is_pointer x || Loc.is_offset x))
   in
-  let handle_alias addr typ = 
+  let handle_alias base_cst addr typ = 
     let v, cst = LocSet.fold 
       ((fun alias (v, cst) ->
         let cst' = Cst.cst_eq alias addr |> Cst.cst_and cst in
         Helper.(v + Val.singleton (alias, cst')), Cst.cst_and cst (Cst.cst_not cst')))
-      (pos_aliases addr typ tmap) (Val.empty, Cst.cst_true)
+      (pos_aliases addr typ tmap) (Val.empty, base_cst)
     in
     Val.add (addr, cst) v
   in
-  let rec iter_loc heap (addr, typ) = 
+  let mk_new_base_cst base_cst addr typ =
+    (* make (a1 != addr) ^ (a2 != addr) ^ ... ^ (an != addr) *)
+    LocSet.fold 
+      (fun alias cst -> Cst.cst_not (Cst.cst_eq alias addr) |> Cst.cst_and cst)
+      (pos_aliases addr typ tmap) base_cst
+  in
+  let rec iter_loc base_cst heap (addr, typ) = 
+    (* base_cst: inherited constraint *)
     if JniModel.is_jni_struct typ then heap
     else 
       let desc = typ.Typ.desc in
       match desc with
       | Tptr (ptr_typ, kind) ->
           let ptr_loc = Loc.mk_pointer addr in
-          let heap' = handle_alias ptr_loc ptr_typ
+          let heap' = handle_alias base_cst ptr_loc ptr_typ
             |> (fun x -> Heap.add addr x heap)
           in
-          iter_loc heap' (ptr_loc, ptr_typ)
+          let new_cst = mk_new_base_cst base_cst ptr_loc ptr_typ in
+          iter_loc new_cst heap' (ptr_loc, ptr_typ)
       | Tstruct name ->
           Helper.get_fld_and_typs name tenv
           |> Caml.List.fold_left
               (fun heap (field, typ) ->
-                iter_loc heap (Loc.mk_offset addr (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer)))))
-              heap 
+                iter_loc base_cst heap (Loc.mk_offset addr (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap 
       | Tarray {elt; length = Some i} -> (* fixed size arrays *)
           let loc' = Loc.unwrap_ptr addr in (* C allocates array location directly to variable address *)
           let index = (IntLit.to_int_exn i) - 1 in
           let rec mk_array i heap = 
             if i = -1 then heap
             else
-              iter_loc heap (Loc.mk_offset loc' (Loc.mk_const_of_int i), (Typ.mk (Tptr (elt, Pk_pointer)))) 
+              iter_loc base_cst heap (Loc.mk_offset loc' (Loc.mk_const_of_int i), (Typ.mk (Tptr (elt, Pk_pointer)))) 
               |> mk_array (i - 1)
           in
           mk_array index heap
       | _ -> 
           heap
   in
-  Caml.List.fold_left iter_loc heap loc_typs
+  Caml.List.fold_left (iter_loc Cst.cst_true) heap loc_typs
 
 let init tenv pdesc =
   let scope = Var.mk_scope (Typ.Procname.to_string (Procdesc.get_proc_name pdesc)) in
