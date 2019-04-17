@@ -99,20 +99,20 @@ let init_heap loc_typs tenv heap tmap = (* loc_types: local list *)
   let pos_aliases addr typ tmap = TypMap.find typ tmap ~default:LocSet.empty
     |> LocSet.filter (fun x -> is_gt addr x && (Loc.is_pointer x || Loc.is_offset x))
   in
-  let handle_alias base_cst addr typ = 
+  let handle_alias base_cst addr pos_a = 
     let v, cst = LocSet.fold 
       ((fun alias (v, cst) ->
         let cst' = Cst.cst_eq alias addr |> Cst.cst_and cst in
         Helper.(v + Val.singleton (alias, cst')), Cst.cst_and cst (Cst.cst_not cst')))
-      (pos_aliases addr typ tmap) (Val.empty, base_cst)
+      pos_a (Val.empty, base_cst)
     in
     Val.add (addr, cst) v
   in
-  let mk_new_base_cst base_cst addr typ =
+  let mk_new_base_cst base_cst addr pos_a =
     (* make (a1 != addr) ^ (a2 != addr) ^ ... ^ (an != addr) *)
     LocSet.fold 
       (fun alias cst -> Cst.cst_not (Cst.cst_eq alias addr) |> Cst.cst_and cst)
-      (pos_aliases addr typ tmap) base_cst
+      pos_a base_cst
   in
   let rec iter_loc base_cst heap (addr, typ) = 
     (* base_cst: inherited constraint *)
@@ -122,10 +122,11 @@ let init_heap loc_typs tenv heap tmap = (* loc_types: local list *)
       match desc with
       | Tptr (ptr_typ, kind) ->
           let ptr_loc = Loc.mk_pointer addr in
-          let heap' = handle_alias base_cst ptr_loc ptr_typ
+          let pos_a = pos_aliases ptr_loc ptr_typ tmap in
+          let heap' = handle_alias base_cst ptr_loc pos_a
             |> (fun x -> Heap.add addr x heap)
           in
-          let new_cst = mk_new_base_cst base_cst ptr_loc ptr_typ in
+          let new_cst = mk_new_base_cst base_cst ptr_loc pos_a in
           iter_loc new_cst heap' (ptr_loc, ptr_typ)
       | Tstruct name ->
           Helper.get_fld_and_typs name tenv
