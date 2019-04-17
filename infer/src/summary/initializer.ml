@@ -26,8 +26,17 @@ module TypMap = struct
     | None ->
         add typ (LocSet.singleton loc) map 
 
+  (* compare two types using Typ.equal_ignore_quals
+   * (except the case if given types are struct) *)
+  let typ_equal_ignore_quals typ typ' =
+    match typ.Typ.desc, typ'.Typ.desc with
+    | Tstruct name, Tstruct name' ->
+        name = name'
+    | _ ->
+        Typ.equal_ignore_quals typ typ'
+
   let find_opt typ map =
-    match bindings map |> Caml.List.find_opt (fun (typ', v) -> Typ.equal_ignore_quals typ typ') with
+    match bindings map |> Caml.List.find_opt (fun (typ', v) -> typ_equal_ignore_quals typ typ') with
     | Some (_, v) ->
         Some v
     | None ->
@@ -94,10 +103,13 @@ let mk_tmap loc_typs tenv tmap =
           failwith (F.asprintf "not support type: %a: %a." Loc.pp loc (Typ.pp_full Pp.text) typ)
   in
   Caml.List.fold_right f loc_typs tmap
+
 let init_heap loc_typs tenv heap tmap = (* loc_types: local list *)
   let is_gt l1 l2 = (Loc.compare l1 l2) = 1 in
-  let pos_aliases addr typ tmap = TypMap.find typ tmap ~default:LocSet.empty
-    |> LocSet.filter (fun x -> is_gt addr x && (Loc.is_pointer x || Loc.is_offset x))
+  let pos_aliases addr typ tmap =
+    let temp = TypMap.find typ tmap ~default:LocSet.empty in
+    L.progress "pos_aliases: [%a] %a\n@." Loc.pp addr LocSet.pp temp;
+    temp |> LocSet.filter (fun x -> is_gt addr x && (Loc.is_pointer x || Loc.is_offset x))
   in
   let handle_alias base_cst addr pos_a = 
     let v, cst = LocSet.fold 
