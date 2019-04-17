@@ -1,5 +1,6 @@
 {
   Java_org_arguslab_icc_1nativetojava_MainActivity_sendIntent:{
+    file: "b2.cpp",
     heap:{
       "ex_intent": "im_17:21:ret",
       "ex_constructor": "im_18:29:ret",
@@ -113,7 +114,6 @@
       },
       {
         ln: "28:22",
-        rloc: "im_ret",
         jfun: "_JNIEnv_GetMethodID",
         args: ["im_arg0", "im_arg1", "im_arg2", "im_arg3"],
         heap: {

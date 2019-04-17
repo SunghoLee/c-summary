@@ -96,7 +96,7 @@
       }
     ]
   },
-  regiterNatives:{
+  registerNatives:{
     file: "b5.cpp",
     heap:{},
     logs:[

@@ -1,5 +1,6 @@
 {
   getCharFromString:{
+    file: "b3.cpp",
     heap:{
       "ex_string": "*(ex_string)"
     },
@@ -16,6 +17,7 @@
     ]
   },
   Java_org_arguslab_native_1complexdata_MainActivity_send:{
+    file: "b3.cpp",
     heap:{
       "ex_thisObj": "*(ex_thisObj)",
       "ex_data": "*(ex_data)"
@@ -60,6 +62,7 @@
     ]
   },
   Java_org_arguslab_native_1complexdata_MainActivity_send2:{
+    file: "b3.cpp",
     heap:{
       "ex_thisObj": "*(ex_thisObj)",
       "ex_data": "*(ex_data)"

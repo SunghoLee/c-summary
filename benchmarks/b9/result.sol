@@ -89,7 +89,7 @@
       }
     ]
   },
-  OnLoad:{
+  JNI_OnLoad:{
     file: "b9.cpp",
     heap:{
     },
