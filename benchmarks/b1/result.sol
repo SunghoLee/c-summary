@@ -1,5 +1,6 @@
 {
   getCharFromString:{
+    file: "b1.cpp",
     heap:{
       "ex_string": "*(ex_string)"
     },
@@ -16,6 +17,7 @@
     ]
   },
   handleIntent:{
+    file: "b1.cpp",
     heap:{
       "ex_me": "*((*(*(*(*(ex_state)))@'activity'))@'clazz')"
     },
@@ -95,6 +97,7 @@
     ]
   },
   android_main:{
+    file: "b1.cpp",
     heap:{
     },
     logs:[
