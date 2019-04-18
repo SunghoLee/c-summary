@@ -601,11 +601,17 @@ end
 
 module LogUnit = struct
   type t = 
-    { rloc: Loc.t
+    { ln: int
+    ; col: int
+    ; rloc: Loc.t
     ; jfun: JNIFun.t
     ; args: Loc.t list
     ; heap: Heap.t }
     [@@deriving compare]
+
+  let get_ln l = l.ln
+
+  let get_col l = l.col
 
   let get_heap l = l.heap
 
@@ -615,15 +621,17 @@ module LogUnit = struct
 
   let get_jfun l = l.jfun
 
-  let mk rloc' jfun' args' heap' = 
-    { rloc = rloc'
+  let mk ln' col' rloc' jfun' args' heap' = 
+    { ln = ln'
+    ; col = col'
+    ; rloc = rloc'
     ; jfun = jfun'
     ; args = args'
     ; heap = heap' }
 
   let update_heap heap' l = { l with heap = heap' }
 
-  let pp fmt = function {rloc; jfun; args; heap} -> 
+  let pp fmt = function {ln; col; rloc; jfun; args; heap} -> 
     let rec pp_list fmt = function
       [] ->
         ()
@@ -632,7 +640,7 @@ module LogUnit = struct
       | h :: t ->
         F.fprintf fmt "%a, %a" Loc.pp h pp_list t
     in
-    F.fprintf fmt "{%a; %a; %a; %a}" Loc.pp rloc JNIFun.pp jfun pp_list args Heap.pp heap
+    F.fprintf fmt "[%d:%d]: {%a; %a; %a; %a}" ln col Loc.pp rloc JNIFun.pp jfun pp_list args Heap.pp heap
 
   let optimize u = { u with heap = (Heap.optimize u.heap ~flocs:u.args) }
 end

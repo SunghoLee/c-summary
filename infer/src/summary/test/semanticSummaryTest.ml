@@ -47,14 +47,22 @@ module JSON2Domain = struct
   end
 
   module JCallLogs = struct
+    let to_lncol location =
+      let open Caml in
+      let sep_index = String.index location ':' in
+      let ln = String.sub location 0 sep_index |> int_of_string in
+      let col = String.sub location (sep_index + 1) ((String.length location) - (sep_index + 1)) |> int_of_string in
+      ln, col
+
     let convert ?file ?proc json =
       (fun jlog ->
         let ln = Basic.Util.member "ln" jlog |> Basic.Util.to_string in
+        let iln, icol = to_lncol ln in
         let rloc = Loc.mk_implicit (ln ^ ":ret") in
         let jfun = Basic.Util.member "jfun" jlog |> Basic.Util.to_string |> JNIFun.of_string in
         let args = Basic.Util.member "args" jlog |> Basic.Util.convert_each (fun jarg -> Basic.Util.to_string jarg |> JLoc2Loc.convert ?file ?proc ~ln) in
         let heap = Basic.Util.member "heap" jlog |> JHeap.convert ?file ?proc ~ln in
-        LogUnit.mk rloc jfun args heap)
+        LogUnit.mk iln icol rloc jfun args heap)
       |> (fun f -> Basic.Util.convert_each f json)
       |> Caml.List.to_seq
       |> CallLogs.of_seq

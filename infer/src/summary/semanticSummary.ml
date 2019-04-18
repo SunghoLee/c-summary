@@ -232,7 +232,7 @@ module TransferFunctions = struct
               (Heap.add arg_addr arg_v dumped_heap, arg_addr :: arg_addrs))
             args (heap', [])
           in
-          let log = LogUnit.mk ret_addr jnifun arg_addrs dumped_heap in
+          let log = LogUnit.mk loc.Location.line loc.Location.col ret_addr jnifun arg_addrs dumped_heap in
           let logs' = CallLogs.add log logs in  
           mk_domain heap' logs'
       | Call ((id, ret_typ), (Const (Cfun callee_pname)), args, loc, flag) -> 
