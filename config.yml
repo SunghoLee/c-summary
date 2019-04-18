@@ -1,0 +1,26 @@
+version: 2
+jobs: 
+  build: 
+    branches:
+      only:
+        - ci-integration
+    docker: 
+      -image: circleci/ocaml:4.07.1
+    steps:
+      -checkout
+      -run:
+        name: Update opam
+        command: "opam update --upgrade"
+      -run:
+        name: Pin version
+        command: "opam pin add --no-action infer ."
+      -run:
+        name: Update depext
+        command: "opam depext --update infer"
+      -run:
+        name: Intall Infer
+        command: "opam install --dpes-only infer"
+      -run:
+        name: Install c-summary
+        command: "bash make_summ.sh"
+
