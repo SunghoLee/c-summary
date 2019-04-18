@@ -23,4 +23,10 @@ jobs:
       - run:
         name: Install c-summary
         command: "bash make_summ.sh"
+  test:
+    steps:
+      - run:
+        command: "cd benchmakrs"
+      - run:
+        command: "bash test_all.sh"
 
