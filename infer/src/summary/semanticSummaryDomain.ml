@@ -554,20 +554,30 @@ module Heap = struct
       | None -> 
           fold (fun loc _ ls -> if is_seed loc then loc :: ls else ls) heap [])
     in
-    let rec calc_closure locset loc =
-      let locset' = find_offsets_of loc heap in
-      let locset'' = 
-        (match find_opt loc heap with
-        | Some v ->
-            Val.fold (fun (l,_) ls -> LocSet.add l ls) v locset'
-        | None ->
-            locset')
-      in
-      LocSet.fold (fun l ls -> LocSet.union ls (calc_closure LocSet.empty l)) locset'' locset'' 
-      |> LocSet.add loc 
-      |> LocSet.union locset
+    let rec calc_closure acc queue = (* using BFS to find closures of a location *)
+      if (Caml.Queue.length queue) = 0 then
+        acc
+      else
+        let loc = Caml.Queue.pop queue in
+        let offsets = find_offsets_of loc heap |> LocSet.filter (fun l -> not (LocSet.mem l acc)) in
+        let acc' = LocSet.fold (fun l a -> Caml.Queue.push l queue; LocSet.add l a) offsets acc in
+        let acc'' = (
+          match find_opt loc heap with
+          | Some v ->
+              Val.fold (fun (l, _) a -> Caml.Queue.push l queue; LocSet.add l a)
+                (Val.filter (fun (l, _) -> not (LocSet.mem l acc')) v)
+                acc'
+          | None ->
+              acc')
+        in
+        calc_closure acc'' queue
     in
-    let loc_closure = Caml.List.fold_left calc_closure LocSet.empty locs in
+    let loc_closure = Caml.List.fold_left 
+      (fun ls loc -> 
+        let queue = Caml.Queue.create () in
+        Caml.Queue.push loc queue;
+        LocSet.union ls (calc_closure (LocSet.add loc LocSet.empty) queue))
+      LocSet.empty locs in
     filter (fun loc _ -> LocSet.mem loc loc_closure) heap 
     |> opt_cst_in_heap
 
