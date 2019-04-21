@@ -58,11 +58,12 @@ module JSON2Domain = struct
       (fun jlog ->
         let ln = Basic.Util.member "ln" jlog |> Basic.Util.to_string in
         let iln, icol = to_lncol ln in
+        let pos = [](* CallSite.list_of_string ln *) in
         let rloc = Loc.mk_implicit (ln ^ ":ret") in
         let jfun = Basic.Util.member "jfun" jlog |> Basic.Util.to_string |> JNIFun.of_string in
         let args = Basic.Util.member "args" jlog |> Basic.Util.convert_each (fun jarg -> Basic.Util.to_string jarg |> JLoc2Loc.convert ?file ?proc ~ln) in
         let heap = Basic.Util.member "heap" jlog |> JHeap.convert ?file ?proc ~ln in
-        LogUnit.mk iln icol rloc jfun args heap)
+        LogUnit.mk pos rloc jfun args heap)
       |> (fun f -> Basic.Util.convert_each f json)
       |> Caml.List.to_seq
       |> CallLogs.of_seq
