@@ -599,19 +599,78 @@ module Heap = struct
 
 end
 
+module CallSite = struct
+  type t =
+    { caller: string (* function name *)
+    ; ln: int (* line number of function call *)
+    ; col: int } (* column number of function call *)
+  [@@deriving compare]
+  
+  (* getters *)
+  let get_caller l = l.caller
+  let get_ln l = l.ln
+  let get_col l = l.col
+
+  (* constructor *)
+  let mk caller' ln' col' =
+    { caller = caller'
+    ; ln = ln'
+    ; col = col' }
+
+  (* list comparator in lexicographical order *)
+  let rec compare_list : t list -> t list -> int = function
+    | [] -> (function
+        | [] -> 0
+        | y :: ys -> -1)
+    | x :: xs -> (function
+        | [] -> 1
+        | y :: ys -> match compare x y with
+            | 0 -> compare_list xs ys
+            | r -> r)
+
+  (* pretty printer *)
+  let pp fmt = function {caller; ln; col} ->
+    F.fprintf fmt "[%s:%d:%d]" caller ln col
+
+  (* pretty printer for list of CallSites *)
+  let pp_list fmt lst =
+    let rec f s = function
+      | [] -> s
+      | {caller; ln; col} :: xs ->
+          let sep = if String.length s > 0 then "," else "" in
+          f (F.sprintf "%s%s%s:%d:%d" s sep caller ln col) xs
+    in F.fprintf fmt "[%s]" (f "" lst)
+
+  (* parser for CallSite
+   * variable `s` must be in the format of "<FN_NAME>:<LN>:<COL>" *)
+  let of_string s =
+    match Str.split (Str.regexp ":") s with
+      [fn; ln; col] -> mk (fn) (int_of_string ln) (int_of_string col)
+    | _ -> failwith "failed LocPos.of_string: wrong format list"
+
+  (* parser for CallSites
+   * variable `s` must be in the format of
+   * "<FN1>:<LN1>:<COL1>[,<FNi>:<LNi>:<COLi>]*" *)
+  let list_of_string s =
+    let rec f res = function
+        [] -> List.rev res
+      | s :: ss -> f (of_string s :: res) ss
+    in
+    if String.length s > 0
+    then f [] (Str.split (Str.regexp ",") s)
+    else []
+end
+
 module LogUnit = struct
   type t = 
-    { ln: int
-    ; col: int
+    { call_sites: CallSite.t list
     ; rloc: Loc.t
     ; jfun: JNIFun.t
     ; args: Loc.t list
     ; heap: Heap.t }
     [@@deriving compare]
 
-  let get_ln l = l.ln
-
-  let get_col l = l.col
+  let get_call_sites l = l.call_sites
 
   let get_heap l = l.heap
 
@@ -621,9 +680,8 @@ module LogUnit = struct
 
   let get_jfun l = l.jfun
 
-  let mk ln' col' rloc' jfun' args' heap' = 
-    { ln = ln'
-    ; col = col'
+  let mk call_sites' rloc' jfun' args' heap' = 
+    { call_sites = call_sites'
     ; rloc = rloc'
     ; jfun = jfun'
     ; args = args'
@@ -631,7 +689,11 @@ module LogUnit = struct
 
   let update_heap heap' l = { l with heap = heap' }
 
-  let pp fmt = function {ln; col; rloc; jfun; args; heap} -> 
+  let append_call_sites cs =
+    function {call_sites} as l ->
+      { l with call_sites = cs :: call_sites }
+
+  let pp fmt = function {call_sites; rloc; jfun; args; heap} -> 
     let rec pp_list fmt = function
       [] ->
         ()
@@ -640,7 +702,8 @@ module LogUnit = struct
       | h :: t ->
         F.fprintf fmt "%a, %a" Loc.pp h pp_list t
     in
-    F.fprintf fmt "[%d:%d]: {%a; %a; %a; %a}" ln col Loc.pp rloc JNIFun.pp jfun pp_list args Heap.pp heap
+    F.fprintf fmt "%a: " CallSite.pp_list call_sites;
+    F.fprintf fmt "{%a; %a; %a; %a}" Loc.pp rloc JNIFun.pp jfun pp_list args Heap.pp heap
 
   let optimize u = { u with heap = (Heap.optimize u.heap ~flocs:u.args) }
 end

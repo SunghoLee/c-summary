@@ -232,7 +232,8 @@ module TransferFunctions = struct
               (Heap.add arg_addr arg_v dumped_heap, arg_addr :: arg_addrs))
             args (heap', [])
           in
-          let log = LogUnit.mk loc.Location.line loc.Location.col ret_addr jnifun arg_addrs dumped_heap in
+          let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
+          let log = LogUnit.mk [cs] ret_addr jnifun arg_addrs dumped_heap in
           let logs' = CallLogs.add log logs in  
           mk_domain heap' logs'
       | Call ((id, ret_typ), (Const (Cfun callee_pname)), args, loc, flag) -> 
@@ -245,7 +246,8 @@ module TransferFunctions = struct
                 let heap'', args_v = calc_args tenv scope loc heap' args in
                 let ienv = Instantiation.mk_ienv tenv scope (fun_params callee_desc) args_v end_heap heap'' in
                 let heap''' = Instantiation.comp_heap heap'' heap'' end_heap ienv in
-                let logs' = Instantiation.comp_log logs end_logs heap''' ienv in
+                let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
+                let logs' = Instantiation.comp_log cs logs end_logs heap''' ienv in
                 let ret_addr = Loc.mk_ret_of_pname callee_pname in
                 let heap'''' = 
                   (match Heap.find_opt ret_addr heap''' with
@@ -308,6 +310,7 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
             close_out oc
           );
           L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
+          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;
           summ'
         | None -> 
             summary
