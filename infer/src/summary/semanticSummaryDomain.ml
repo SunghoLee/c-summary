@@ -690,7 +690,7 @@ module LogUnit = struct
   let update_heap heap' l = { l with heap = heap' }
 
   let append_call_sites cs =
-    function {call_sites; rloc; jfun; args; heap} as l ->
+    function {call_sites} as l ->
       { l with call_sites = cs :: call_sites }
 
   let pp fmt = function {call_sites; rloc; jfun; args; heap} -> 
