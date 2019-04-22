@@ -24,7 +24,7 @@ module NameType = struct
       if typ1 = typ2 then
         Some typ1
       else
-        failwith "cannot be joined.")
+        failwith (F.asprintf "cannot be joined:%a\n #FST: %a\n #SND: %a\n" (Pvar.pp Pp.text) var (Typ.pp_full Pp.text) typ1 (Typ.pp_full Pp.text) typ2))
     |> (fun x -> union x lhs rhs)
 
   let widen ~prev ~next ~num_iters = join prev next
@@ -87,16 +87,20 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
       let post = (
       match instr with
       | Load (id, e1, typ, loc) -> 
-              exec_expr astate e1 typ false
+              (*exec_expr astate e1 typ false*)
+          astate
       | Store (e1, typ, e2, loc) -> 
-          let astate' = exec_expr astate e1 typ false in
-          exec_expr astate' e2 typ true 
+          exec_expr astate e1 typ false
+          (*let astate' = exec_expr astate e1 typ false in
+          exec_expr astate' e2 typ true *)
       | Prune (e, loc, b, i) -> astate
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) -> 
+          (*
           if (Typ.Procname.to_string callee_pname) = "__variable_initialization" then
             Caml.List.fold_left (fun i (e, t) -> exec_expr i e t false) astate args
           else
-            Caml.List.fold_left (fun i (e, t) -> exec_expr i e t true) astate args
+            Caml.List.fold_left (fun i (e, t) -> exec_expr i e t true) astate args*)
+          astate
       | Call ((id, typ_e1), _, args, loc, flag) -> 
           astate
           (* failwith "C does not support this!" *)

@@ -168,7 +168,11 @@ let init tenv pdesc =
   in
   let local_vars = 
     if GlobalEnv.is_global_var_init_fun pdesc then
-      [GlobalEnv.get_initialized_global_ext pdesc |> (fun (pvar, typ) -> Var.of_pvar pvar, typ)]
+      (match GlobalEnv.get_initialized_global pdesc with
+      | Some (pvar, typ) ->
+          [Var.of_pvar pvar, typ]
+      | None ->
+          [])
     else
       Caml.List.map
       (fun (var: ProcAttributes.var_data) -> Var.of_string (Mangled.to_string var.name) ~proc:scope, var.typ)

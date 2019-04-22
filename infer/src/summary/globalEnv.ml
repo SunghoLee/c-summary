@@ -27,6 +27,12 @@ let get_initialized_global_ext pdesc =
           false)
     (internal_get_glob_pvars ())
 
+let get_initialized_global pdesc =
+  try
+    Some (get_initialized_global_ext pdesc)
+  with (_) ->
+    None
+
 let get_glob_pvars () = []
   (*let globals = [] PreForGlobal.Storage.load () in
   PreForGlobal.NameType.fold
