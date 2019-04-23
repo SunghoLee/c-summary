@@ -79,7 +79,7 @@ let mk_tmap loc_typs tenv tmap =
       | Tstruct name ->
           Helper.get_fld_and_typs name tenv
           |> Caml.List.fold_left 
-              (fun tmap (field, typ) -> f (Loc.mk_offset loc (Loc.mk_const_of_string field), typ) tmap)
+              (fun tmap (field, typ) -> f (Loc.mk_offset loc (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer)))) tmap)
               tmap'
       | Tarray {elt; length = Some i} -> (* fixed size arrays *)
           let loc' = Loc.unwrap_ptr loc in (* C allocates array location directly to variable address *)
