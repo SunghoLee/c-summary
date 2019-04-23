@@ -244,7 +244,26 @@ module TransferFunctions = struct
               | Some ({ heap = end_heap; logs = end_logs }) ->
                 let heap' = Heap.optimize ~scope heap in
                 let heap'', args_v = calc_args tenv scope loc heap' args in
-                let ienv = Instantiation.mk_ienv tenv scope (fun_params callee_desc) args_v end_heap heap'' in
+                let args_v' = (* Ignore variadic arguments *)
+                  let callee_attr = Procdesc.get_attributes callee_desc in
+                  if callee_attr.ProcAttributes.is_variadic then
+                    let arg_len = (Caml.List.length callee_attr.ProcAttributes.formals) in
+                    let rec sublist l i =
+                      if i = arg_len then
+                        []
+                      else (
+                        match l with
+                        | [] ->
+                            failwith "The number of arguments is less then formals."
+                        | h :: t ->
+                            h :: (sublist t (i + 1))
+                      )
+                    in
+                    sublist args_v 0
+                  else
+                    args_v
+                in
+                let ienv = Instantiation.mk_ienv tenv scope (fun_params callee_desc) args_v' end_heap heap'' in
                 let heap''' = Instantiation.comp_heap heap'' heap'' end_heap ienv in
                 let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
                 let logs' = Instantiation.comp_log cs logs end_logs heap''' ienv in
@@ -269,6 +288,9 @@ module TransferFunctions = struct
           | None -> 
               let () = L.progress "Not existing callee. Just ignore this call.\n@." in
               mk_domain heap logs)
+      | Call ((id, ret_typ), e, args, loc, flag) -> 
+          let () = L.progress "FUN_EXPR: %a\n@." Val.pp (exec_expr scope loc heap e) in
+          mk_domain heap logs
       | Call _ ->
           let () = L.progress "Not support function pointers\n@." in
           mk_domain heap logs
