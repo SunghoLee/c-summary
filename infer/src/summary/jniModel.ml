@@ -15,7 +15,9 @@ let android_entry =
 
 let jni_struct = 
   [ "android_app"
-  ; "_JNIEnv" ]
+  ; "_JNIEnv" 
+  ; "JNINativeInterface"
+  ]
 
 let jni_obj_typ = 
   [ "_jobject"
