@@ -713,7 +713,7 @@ module CallLogs = struct
 
   let ( <= ) = subset
 
-  let ( < ) lhs rhs = (lhs <= rhs) && (lhs <> rhs)
+  let ( < ) lhs rhs = (lhs <= rhs) && (not (equal lhs rhs))
 
   let join = union
 
@@ -725,7 +725,7 @@ module CallLogs = struct
 
   let widen ~prev ~next =
     if prev < next then (* log size is increasing *)
-      failwith "we hope that logs are not increased in a loop."
+      failwith (F.asprintf "we hope that logs are not increased in a loop.\n#FST: %a\n#SND: %a" pp prev pp next)
     else
       join prev next
 
