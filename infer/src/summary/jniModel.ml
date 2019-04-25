@@ -62,3 +62,11 @@ let is_jni_struct typ =
 let is_entry f = 
   let name = Typ.Procname.to_string f in
   Caml.List.mem name (jni_entry @ android_entry)
+
+let is_callable_from_java f =
+  if is_entry f then
+    true
+  else
+    let name = Typ.Procname.to_string f in
+    String.is_prefix name ~prefix:"Java_"
+  

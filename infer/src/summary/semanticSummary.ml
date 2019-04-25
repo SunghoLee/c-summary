@@ -6,6 +6,39 @@ module Sem = SemanticFunctions
 open SemanticSummaryDomain
 open SUtils
 
+module AnalysisTargets = struct
+  module Targets = PrettyPrintable.MakePPSet(Typ.Procname) 
+
+  let targets_dat = "targets.dat"
+
+  let load_targets () = 
+    try
+      let ic = Pervasives.open_in targets_dat in
+      let res = Marshal.from_channel ic in
+      Pervasives.close_in ic; res
+    with _ ->
+      Targets.empty
+    
+  let store_target proc_name = 
+    let targets = load_targets () in
+    let targets' = Targets.add proc_name targets in
+    let oc = Pervasives.open_out targets_dat in
+    Marshal.to_channel oc targets' [];
+    Pervasives.close_out oc
+
+  let is_targeted proc_name = 
+    if JniModel.is_jni proc_name then
+      false
+    else if JniModel.is_callable_from_java proc_name then
+      true
+    else 
+      let res = load_targets () in
+      Targets.mem proc_name res 
+
+  let add_target proc_name = 
+    store_target proc_name 
+end
+
 module PpSumm = struct
   let get_inst_type (i: Sil.instr) = 
     match i with
@@ -64,12 +97,13 @@ module TransferFunctions = struct
 
   let get_proc_summary ?caller callee_name = 
     let () = L.progress "Request summary of %s\n@." (Typ.Procname.to_string callee_name) in
+    let () = AnalysisTargets.add_target callee_name in
     let sum = 
       match caller with
       | Some s -> (
-        Ondemand.analyze_proc_name ~caller_pdesc:s callee_name)
+          Ondemand.analyze_proc_name ~caller_pdesc:s callee_name)
       | None -> (
-        Ondemand.analyze_proc_name callee_name)
+          Ondemand.analyze_proc_name callee_name)
     in
     match sum with
     | Some s -> (
@@ -286,7 +320,7 @@ module TransferFunctions = struct
                   mk_domain heap logs
                   )
           | None -> 
-              let () = L.progress "Not existing callee. Just ignore this call.\n@." in
+              let () = L.progress "Not existing callee (empty declaration). Just ignore this call.\n@." in
               mk_domain heap logs)
       | Call ((id, ret_typ), e, args, loc, flag) -> 
           let () = L.progress "FUN_EXPR: %a\n@." Val.pp (exec_expr scope loc heap e) in
@@ -311,7 +345,7 @@ module Analyzer = AbstractInterpreter.MakeWTO (TransferFunctions)
 
 let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
     let proc_name = Procdesc.get_proc_name proc_desc in
-    if not (JniModel.is_jni proc_name) then (
+    if AnalysisTargets.is_targeted proc_name then (
         let () = L.progress "Analyzing a function %s\n@." (Typ.Procname.to_string proc_name) in
         let () = L.progress "ATTRIBUTE:\n%a\n@." ProcAttributes.pp (Procdesc.get_attributes proc_desc) in
         let heap = Initializer.init tenv proc_desc in
@@ -338,4 +372,5 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
             summary
     )
     else 
-        (L.progress "Skiping analysis for a JNI function %s\n@." (Typ.Procname.to_string proc_name); summary)
+      summary
+        (*(L.progress "Skiping analysis for a JNI function %s\n@." (Typ.Procname.to_string proc_name); summary)*)
