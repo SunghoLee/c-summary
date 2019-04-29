@@ -132,6 +132,8 @@ module Loc = struct
 
   let mk_offset l i = Offset (l, i)
 
+  let get_base = function Offset (l, i) -> l | _ -> failwith "it is not an offset."
+
   let unwrap_ptr = function Pointer i -> i | _ -> failwith "it is not a pointer."
 
   let of_id ?proc id = Var.of_id ?proc id |> mk_explicit
@@ -384,10 +386,62 @@ module Cst = struct
       impl e 
   end 
 
+  module SimpleCSTSolver = struct
+    type res_type = SOLVED of t | UNSOLVED
+
+    let rec simplify = function
+      | True ->
+          SOLVED True
+      | False ->
+          SOLVED False
+      | Or (cst1, cst2) -> (
+          match simplify cst1, simplify cst2 with
+          | SOLVED True, _ | _, SOLVED True ->
+              SOLVED True
+          | SOLVED False, SOLVED False ->
+              SOLVED False
+          | _ ->
+              UNSOLVED)
+      | And (cst1, cst2) -> (
+          match simplify cst1, simplify cst2 with
+          | SOLVED False, _ | _, SOLVED False ->
+              SOLVED False
+          | SOLVED True, SOLVED True ->
+              SOLVED True
+          | _ ->
+              UNSOLVED)
+      | Not cst -> (
+          match simplify cst with
+          | SOLVED True ->
+              SOLVED False
+          | SOLVED False ->
+              SOLVED True
+          | _ ->
+              UNSOLVED)
+      | Eq (loc1, loc2) -> (
+          if not (Loc.is_pointer loc1) && not (Loc.is_pointer loc2) then (
+            if loc1 = loc2 then
+              SOLVED True
+            else
+              SOLVED False)
+          else
+            UNSOLVED
+      )
+  end
+
   module SMTSolver = struct
     let ctx = 
       let cfg = [("model", "true")] in
       mk_context cfg
+
+    let simplify cst =
+      match SimpleCSTSolver.simplify cst with
+      | SOLVED cst' ->
+          cst'
+      | UNSOLVED ->
+          let () = L.progress "\t => Complex contraint: Using Z3 for solving." in
+          let expr = Z3Encoder.encode ctx cst in
+          Expr.simplify expr None |> Z3Encoder.decode 
 
     let is_sat cst = 
       let expr = Z3Encoder.encode ctx cst in
@@ -434,11 +488,11 @@ module Val = struct
 
   let optimize avs = 
     (fun (value, cst) avs -> 
-      match Cst.SMTSolver.is_sat cst with
-      | true, cst' ->
-          add (value, cst') avs
-      | _ ->
-          avs)
+      match Cst.SMTSolver.simplify cst with
+      | False ->
+          avs
+      | _ as cst' ->
+          add (value, cst') avs)
     |> (fun f -> fold f avs empty)
 end 
 
@@ -529,6 +583,75 @@ module Heap = struct
   let disjoint_union heap1 heap2 =
     union (fun _ _ _ -> failwith "Heaps are not disjoint!") heap1 heap2
 
+  module HeapDepGraph = struct
+    type vertex = {id: int (* unique id *); mutable ig: vertex list; mutable og: vertex list}
+    [@@deriving compare]
+
+    module LocVertexMap = PrettyPrintable.MakePPMap(Loc)
+    module ID2LocMap = PrettyPrintable.MakePPMap(Int)
+
+    let id = ref 1
+
+    type graph = {mutable vmap: vertex LocVertexMap.t; mutable imap: Loc.t ID2LocMap.t}
+
+    let init () = {vmap = LocVertexMap.empty; imap = ID2LocMap.empty}
+
+    let new_vertex loc g =
+      let cur_id = !id in
+      (id := !id + 1
+      ; g.imap <- ID2LocMap.add cur_id loc g.imap)
+      ; let v = {id = cur_id; ig = []; og = []} in
+      (g.vmap <- LocVertexMap.add loc v g.vmap
+      ; v)
+
+    let get_vertex loc g = 
+      match LocVertexMap.find_opt loc g.vmap with
+      | Some v ->
+         v 
+      | None ->
+         new_vertex loc g
+
+    let add_edge src dst = 
+      src.og <- dst :: src.og
+      ; dst.ig <- src :: dst.ig
+
+    let make heap = 
+      fold (fun loc value g ->
+        let from_vertex = get_vertex loc g in (
+          if Loc.is_pointer loc then
+            let base = Loc.unwrap_ptr loc in
+            let ffrom_vertex = get_vertex base g in
+            add_edge ffrom_vertex from_vertex
+          else if Loc.is_offset loc then
+            let base = Loc.get_base loc in
+            let ffrom_vertex = get_vertex base g in
+            add_edge ffrom_vertex from_vertex
+        );
+        Val.iter (fun (loc, _) ->
+          let to_vertex = get_vertex loc g in
+          add_edge from_vertex to_vertex) value; g) heap (init ())
+
+    let get_closure loc g = 
+      let rec impl acc queue =
+        if (Caml.Queue.length queue) = 0 then
+          acc
+        else
+          let v = Caml.Queue.pop queue in
+          let acc' = Caml.List.fold_left (fun acc v ->
+              let l = ID2LocMap.find v.id g.imap in
+              if not (LocSet.mem l acc) then
+                (Caml.Queue.push v queue; LocSet.add l acc)
+              else
+                acc)
+            acc v.og
+          in
+          impl acc' queue
+      in
+      let v = LocVertexMap.find loc g.vmap in
+      let queue = Caml.Queue.create () in
+      (Caml.Queue.push v queue; impl (LocSet.add loc LocSet.empty) queue)
+  end
+
   let opt_cst_in_heap heap =
     let opt_v_heap = fun loc v heap ->
       let v' = Val.optimize v in
@@ -540,6 +663,8 @@ module Heap = struct
     fold opt_v_heap heap empty
 
   let optimize ?scope ?flocs heap = 
+    let () = L.progress "#Start Heap Optimization\n@." in
+    let start_time = Unix.time () in
     let is_seed = 
       match scope with
       | Some p ->
@@ -547,45 +672,38 @@ module Heap = struct
       | None ->
           fun (loc: Loc.t) -> match loc with Explicit _ -> true | _ -> false
     in
+    let hdg = HeapDepGraph.make heap in
+    let seed_time = Unix.time () in
+    let () = L.progress "\t Found seeds: %f\n@." (seed_time -. start_time) in
     let locs = (
       match flocs with
       | Some s ->
-          s
+          fold (fun loc _ ls -> if Caml.List.mem loc s then loc :: ls else ls) heap []
       | None -> 
           fold (fun loc _ ls -> if is_seed loc then loc :: ls else ls) heap [])
     in
-    let rec calc_closure acc queue = (* using BFS to find closures of a location *)
-      if (Caml.Queue.length queue) = 0 then
-        acc
-      else
-        let loc = Caml.Queue.pop queue in
-        let offsets = find_offsets_of loc heap |> LocSet.filter (fun l -> not (LocSet.mem l acc)) in
-        let acc' = LocSet.fold (fun l a -> Caml.Queue.push l queue; LocSet.add l a) offsets acc in
-        let acc'' = (
-          match find_opt loc heap with
-          | Some v ->
-              Val.fold (fun (l, _) a -> Caml.Queue.push l queue; LocSet.add l a)
-                (Val.filter (fun (l, _) -> not (LocSet.mem l acc')) v)
-                acc'
-          | None ->
-              acc')
-        in
-        calc_closure acc'' queue
-    in
+    let locs_time = Unix.time () in
+    let () = L.progress "\t Initial Locs: %f\n@." (locs_time -. seed_time) in
     let loc_closure = Caml.List.fold_left 
       (fun ls loc -> 
-        let queue = Caml.Queue.create () in
-        Caml.Queue.push loc queue;
-        LocSet.union ls (calc_closure (LocSet.add loc LocSet.empty) queue))
-      LocSet.empty locs in
-    filter (fun loc _ -> LocSet.mem loc loc_closure) heap 
-    |> opt_cst_in_heap
+        LocSet.union ls (HeapDepGraph.get_closure loc hdg))
+      LocSet.empty locs 
+    in
+    let closure_time = Unix.time () in
+    let () = L.progress "\t Found Closures: %f\n@." (closure_time -. locs_time) in
+    let res = filter (fun loc _ -> LocSet.mem loc loc_closure) heap |> opt_cst_in_heap in
+    let filtering_time = Unix.time () in
+    let () = L.progress "\t Filtering: %f\n@." (filtering_time -. closure_time) in
+    let () = L.progress "\t Done.\n@." in
+    res
 
 
   let join lhs rhs = 
     (* TODO: need to revise this for performance *)
+    let () = L.progress "#Start Heap Optimization.\n@." in
     let lhs' = opt_cst_in_heap lhs in
     let rhs' = opt_cst_in_heap rhs in
+    let () = L.progress "\tDone.\n@." in
     union (fun key val1 val2 -> Some (Val.join val1 val2)) lhs' rhs'
 
   let widen ~prev ~next =
@@ -781,7 +899,7 @@ module Domain = struct
       | None ->
           Heap.fold (fun loc _ loclist -> if Loc.is_explicit loc then loc::loclist else loclist) heap [])
     in
-    let heap' = Heap.optimize heap ~flocs:non_temp_locs ?scope in
+    let heap' = Heap.optimize heap (*~flocs:non_temp_locs*) ?scope in
     let logs' = CallLogs.optimize ?scope logs in
     make heap' logs'
 

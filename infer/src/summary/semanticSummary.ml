@@ -95,7 +95,8 @@ module TransferFunctions = struct
     else
       Domain.make heap logs
 
-  let get_proc_summary ?caller callee_name = 
+  let rec get_proc_summary ?caller do_clear callee_name = 
+    Ondemand.clear_cache ();
     let () = L.progress "Request summary of %s\n@." (Typ.Procname.to_string callee_name) in
     let () = AnalysisTargets.add_target callee_name in
     let sum = 
@@ -110,8 +111,17 @@ module TransferFunctions = struct
         match s.Summary.payloads.Payloads.semantic_summary with
         | Some _ as o -> 
             o
-        | None -> 
-            None)
+        | None -> (
+            if do_clear then (
+              match Ondemand.get_proc_desc callee_name with
+              | Some callee_pdesc -> (
+                  let _ = Summary.reset callee_pdesc in
+                  Ondemand.clear_cache ();
+                  get_proc_summary ?caller false callee_name)
+              | None ->
+                  None)
+            else
+              None))
     | None -> 
         None
 
@@ -182,7 +192,7 @@ module TransferFunctions = struct
                 | Some callee_pname -> (
                     match Ondemand.get_proc_desc callee_pname with 
                     | Some callee_desc -> ((* no exisiting function: because of functions Infer made *)
-                        match get_proc_summary callee_pname with
+                        match get_proc_summary true callee_pname with
                         | Some ({heap=end_heap}) ->
                             let rhs_v = Val.singleton (Loc.of_pvar pvar, Cst.cst_true) in
                             let h' = Heap.union (fun l v1 v2 -> Some (Val.union v1 v2)) heap end_heap in
@@ -217,7 +227,7 @@ module TransferFunctions = struct
           let lhs_addr = Loc.of_id ~proc:scope id in
           match Pvar.get_initializer_pname pvar with
           | Some callee_pname -> (
-              match get_proc_summary callee_pname with
+              match get_proc_summary true callee_pname with
               | Some ({heap=end_heap}) ->
                   let heap' = Heap.union (fun l v1 v2 -> Some (Val.union v1 v2)) heap end_heap in
                   let rhs_addr = Loc.of_pvar pvar in
@@ -274,7 +284,7 @@ module TransferFunctions = struct
           let lhs_addr = Loc.of_id ~proc:scope id in
           (match Ondemand.get_proc_desc callee_pname with 
           | Some callee_desc -> (* no exisiting function: because of functions Infer made *)
-              (match get_proc_summary ~caller:pdesc callee_pname with
+              (match get_proc_summary true ~caller:pdesc callee_pname with
               | Some ({ heap = end_heap; logs = end_logs }) ->
                 let heap' = Heap.optimize ~scope heap in
                 let heap'', args_v = calc_args tenv scope loc heap' args in
@@ -342,7 +352,6 @@ end
 module Analyzer = AbstractInterpreter.MakeWTO (TransferFunctions)
 
 (* module Initializer = struct ... end was moved to 'initializer.ml' *)
-
 let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
     let proc_name = Procdesc.get_proc_name proc_desc in
     if AnalysisTargets.is_targeted proc_name then (
@@ -350,27 +359,16 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         let () = L.progress "ATTRIBUTE:\n%a\n@." ProcAttributes.pp (Procdesc.get_attributes proc_desc) in
         let heap = Initializer.init tenv proc_desc in
         let before_astate = SemanticSummaryDomain.make heap SemanticSummaryDomain.CallLogs.empty in
-        let proc_data = ProcData.make_default proc_desc tenv in 
+        let proc_data = ProcData.make_default proc_desc tenv in (
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
           let opt_astate = Domain.optimize p ~scope:(Var.mk_scope (Typ.Procname.to_string proc_name)) in
-          let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
-          let summ' = {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some opt_astate}; Summary.proc_desc = proc_desc; Summary.sessions = ref session} in
-          Summary.store summ'; 
-          (if JniModel.is_java_native proc_name then
-            let ldg = LogDepGraph.mk_ldg opt_astate.logs in
-            let dot_graph = LogDepGraph.DotPrinter.DotGraph.to_dot_graph ldg in
-            let graph_str = F.asprintf "%a" LogDepGraph.DotPrinter.DotGraph.pp dot_graph in
-            let oc = open_out ((Typ.Procname.to_string proc_name) ^ ".out") in
-            let () = Printf.fprintf oc "%s" graph_str in
-            close_out oc
-          );
           L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
           L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;
-          summ'
+          let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
+          {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some opt_astate}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 
-            summary
+            summary)
     )
     else 
       summary
-        (*(L.progress "Skiping analysis for a JNI function %s\n@." (Typ.Procname.to_string proc_name); summary)*)
