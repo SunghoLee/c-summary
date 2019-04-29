@@ -439,7 +439,7 @@ module Cst = struct
       | SOLVED cst' ->
           cst'
       | UNSOLVED ->
-          let () = L.progress "\t => Complex contraint: Using Z3 for solving." in
+          (*let () = L.progress "\t => Complex contraint: Using Z3 for solving." in*)
           let expr = Z3Encoder.encode ctx cst in
           Expr.simplify expr None |> Z3Encoder.decode 
 
