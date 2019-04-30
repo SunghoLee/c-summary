@@ -584,15 +584,22 @@ module Heap = struct
     union (fun _ _ _ -> failwith "Heaps are not disjoint!") heap1 heap2
 
   module HeapDepGraph = struct
-    type vertex = {id: int (* unique id *); mutable ig: vertex list; mutable og: vertex list}
-    [@@deriving compare]
+
+    module Vertex = struct
+      type t = {id: int (* unique id *); mutable ig: t list; mutable og: t list}
+      [@@deriving compare]
+
+      let make cur_id = {id = cur_id; ig = []; og = []}
+
+      let pp fmt v = Format.fprintf fmt "V#%d" v.id
+    end
 
     module LocVertexMap = PrettyPrintable.MakePPMap(Loc)
     module ID2LocMap = PrettyPrintable.MakePPMap(Int)
 
     let id = ref 1
 
-    type graph = {mutable vmap: vertex LocVertexMap.t; mutable imap: Loc.t ID2LocMap.t}
+    type graph = {mutable vmap: Vertex.t LocVertexMap.t; mutable imap: Loc.t ID2LocMap.t}
 
     let init () = {vmap = LocVertexMap.empty; imap = ID2LocMap.empty}
 
@@ -600,18 +607,18 @@ module Heap = struct
       let cur_id = !id in
       (id := !id + 1
       ; g.imap <- ID2LocMap.add cur_id loc g.imap)
-      ; let v = {id = cur_id; ig = []; og = []} in
+      ; let v = Vertex.make cur_id in
       (g.vmap <- LocVertexMap.add loc v g.vmap
       ; v)
 
     let get_vertex loc g = 
       match LocVertexMap.find_opt loc g.vmap with
       | Some v ->
-         v 
-      | None ->
-         new_vertex loc g
+       v 
+    | None ->
+       new_vertex loc g
 
-    let add_edge src dst = 
+    let add_edge (src: Vertex.t) (dst: Vertex.t) = 
       src.og <- dst :: src.og
       ; dst.ig <- src :: dst.ig
 
@@ -631,25 +638,26 @@ module Heap = struct
           let to_vertex = get_vertex loc g in
           add_edge from_vertex to_vertex) value; g) heap (init ())
 
-    let get_closure loc g = 
+    let get_closure locs g = 
+      let module VSet = PrettyPrintable.MakePPSet(Vertex) in
       let rec impl acc queue =
         if (Caml.Queue.length queue) = 0 then
           acc
         else
           let v = Caml.Queue.pop queue in
           let acc' = Caml.List.fold_left (fun acc v ->
-              let l = ID2LocMap.find v.id g.imap in
-              if not (LocSet.mem l acc) then
-                (Caml.Queue.push v queue; LocSet.add l acc)
+              if not (VSet.mem v acc) then
+                (Caml.Queue.push v queue; VSet.add v acc)
               else
                 acc)
             acc v.og
           in
           impl acc' queue
       in
-      let v = LocVertexMap.find loc g.vmap in
+      let vertexes = Caml.List.map (fun l -> LocVertexMap.find l g.vmap) locs in
       let queue = Caml.Queue.create () in
-      (Caml.Queue.push v queue; impl (LocSet.add loc LocSet.empty) queue)
+      ((Caml.Queue.add_seq queue (Caml.List.to_seq vertexes); impl (VSet.of_seq (Caml.List.to_seq vertexes)) queue)
+      |> VSet.fold (fun (v: Vertex.t) loc_set -> LocSet.add (ID2LocMap.find v.id g.imap) loc_set)) LocSet.empty
   end
 
   let opt_cst_in_heap heap =
@@ -684,11 +692,7 @@ module Heap = struct
     in
     let locs_time = Unix.time () in
     let () = L.progress "\t Initial Locs: %f\n@." (locs_time -. seed_time) in
-    let loc_closure = Caml.List.fold_left 
-      (fun ls loc -> 
-        LocSet.union ls (HeapDepGraph.get_closure loc hdg))
-      LocSet.empty locs 
-    in
+    let loc_closure = HeapDepGraph.get_closure locs hdg in
     let closure_time = Unix.time () in
     let () = L.progress "\t Found Closures: %f\n@." (closure_time -. locs_time) in
     let res = filter (fun loc _ -> LocSet.mem loc loc_closure) heap |> opt_cst_in_heap in
