@@ -56,7 +56,7 @@ let mk_ienv tenv caller_scope params args callee_heap caller_heap =
     InstEnv.empty all_params
   in
   let res = fp_mk_ienv caller_scope callee_heap heap' ienv |> InstEnv.optimize in
-  let () = L.progress "IENV: %a\n@." InstEnv.pp res in
+  (*let () = L.progress "IENV: %a\n@." InstEnv.pp res in*)
   res
 
 (* instantiate a constraint *)

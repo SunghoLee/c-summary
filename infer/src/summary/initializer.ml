@@ -192,5 +192,10 @@ let init tenv pdesc =
     (fun (var, typ) -> Loc.mk_explicit var, Typ.mk (Tptr (typ, Pk_pointer)))
     |> (fun f -> (Caml.List.map f arg_vars, Caml.List.map f local_vars))
   in
-  let tmap = mk_tmap locs_arg tenv TypMap.empty in
-  init_heap (locs_arg @ locs_loc) tenv Heap.empty tmap
+  if (Typ.Procname.is_constructor (Procdesc.get_proc_name pdesc)) then
+    init_heap (locs_arg @ locs_loc) tenv Heap.empty TypMap.empty
+  else
+    let tmap = mk_tmap locs_arg tenv TypMap.empty in
+    let res = init_heap (locs_arg @ locs_loc) tenv Heap.empty tmap in
+    (*let () = L.progress "InitHeap: %a\n@." Heap.pp res in res*)
+    res

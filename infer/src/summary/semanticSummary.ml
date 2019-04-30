@@ -363,8 +363,8 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
           let opt_astate = Domain.optimize p ~scope:(Var.mk_scope (Typ.Procname.to_string proc_name)) in
-          L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
-          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;
+          (*L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
+          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some opt_astate}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 
