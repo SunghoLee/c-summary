@@ -83,9 +83,9 @@ module TransferFunctions = struct
       [ holder, htyp ]
     else *)
       let attrs = Procdesc.get_attributes pdesc in
-      let scope = Var.mk_scope (Typ.Procname.to_string (Procdesc.get_proc_name pdesc)) in
+      let scope = VVar.mk_scope (Typ.Procname.to_string (Procdesc.get_proc_name pdesc)) in
       let args = attrs.formals in
-      Caml.List.map (fun (m, typ) -> ((Var.of_string (Mangled.to_string m) ~proc:scope), typ)) args
+      Caml.List.map (fun (m, typ) -> ((VVar.of_string (Mangled.to_string m) ~proc:scope), typ)) args
 
   let opt_heap_every_stmt = false
 
@@ -145,7 +145,7 @@ module TransferFunctions = struct
         (* only handle string and integer constants *)
         (match c with
         | Cint s -> 
-            let loc = IntLit.to_int_exn s |> Loc.mk_const_of_int in
+            let loc = IntLit.to_big_int s |> Loc.mk_const_of_z in
             Val.singleton (loc, Cst.cst_true)
         | Cfun fn ->
             Val.singleton (Loc.mk_fun_pointer fn, Cst.cst_true)
@@ -180,7 +180,7 @@ module TransferFunctions = struct
           arr_index_pair Val.empty
     | Sizeof data -> 
         (* TODO: Calculate the size of data *)
-        Val.singleton (Loc.mk_const_of_int 1, Cst.cst_true)
+        Val.singleton (Loc.mk_const_of_z Z.one, Cst.cst_true)
         (* AVS.singleton (Val.of_int (Int.top), Cst.cst_true) *)
 
     let calc_args tenv scope location heap args =
@@ -217,11 +217,19 @@ module TransferFunctions = struct
       in
       heap', globs_v @ args_v
 
+    let print_to_file caller callee merged ienv =
+        let to_file pp h n =
+            let oc = open_out n in
+            let () = Printf.fprintf oc "%s" (Format.asprintf "%a" pp h) in
+            close_out oc
+        in
+        to_file Heap.pp caller "heap_caller"; to_file Heap.pp callee "heap_callee"; to_file Heap.pp merged "heap_merged"; to_file InstEnv.pp ienv "inst_env"
+
   let exec_instr : Domain.t -> extras ProcData.t -> CFG.Node.t -> Sil.instr -> Domain.t = 
     fun {heap; logs} {pdesc; tenv; extras} node instr ->
       let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in
       let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
-      let scope = Var.mk_scope proc_name in
+      let scope = VVar.mk_scope proc_name in
       match instr with
       | Load (id, Exp.Lvar pvar, typ, loc) when Pvar.is_global pvar -> (
           let lhs_addr = Loc.of_id ~proc:scope id in
@@ -309,20 +317,24 @@ module TransferFunctions = struct
                 in
                 let ienv = Instantiation.mk_ienv tenv scope (fun_params callee_desc) args_v' end_heap heap'' in
                 let heap''' = Instantiation.comp_heap heap'' heap'' end_heap ienv in
+                (*let () = print_to_file heap'' end_heap heap''' ienv in
+                let () = Caml.List.iter (fun arg_v -> L.progress "ARG: %a\n@." Val.pp arg_v) args_v' in 
+                let () = L.progress "#Instantiation: HeapSize Changed ((%d + %d) -> %d)\n@." (Heap.size heap'') (Heap.size end_heap) (Heap.size heap''') in
+                let _ = read_line () in*)
                 let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
                 let logs' = Instantiation.comp_log cs logs end_logs heap''' ienv in
                 let ret_addr = Loc.mk_ret_of_pname callee_pname in
                 let heap'''' = 
                   (match Heap.find_opt ret_addr heap''' with
                   | Some v -> 
-                      Heap.add lhs_addr v heap'''
+                      Heap.add lhs_addr v (Heap.remove ret_addr heap''')
                   | None -> (* kind of passing parameter as a return value *)
-                      let ret_param_addr = Var.of_string "__return_param" ~proc:scope |> Loc.mk_explicit in
+                      let ret_param_addr = VVar.of_string "__return_param" ~proc:scope |> Loc.mk_explicit in
                       (match Heap.find_opt ret_param_addr heap''' with
                       | Some v ->
-                          Heap.add lhs_addr v heap'''
+                          Heap.add lhs_addr v (Heap.remove ret_param_addr heap''')
                       | None ->
-                          Heap.add lhs_addr (Val.singleton (Loc.mk_implicit (Location.to_string loc), Cst.cst_true)) heap'''))
+                          heap''' ))
                 in
                 mk_domain heap'''' logs'
               | None -> 
@@ -343,7 +355,18 @@ module TransferFunctions = struct
       | Abstract loc -> 
           mk_domain heap logs
       | ExitScope (id_list, loc) -> 
-          mk_domain heap logs
+          let heap' =Caml.List.fold_left (fun heap id ->
+            (match Var.get_ident id with
+            | Some ident -> 
+                Heap.remove (Loc.of_id ident) heap
+            | None ->
+                (match Var.get_pvar id with
+                | Some pvar ->
+                    Heap.remove (Loc.of_pvar pvar) heap
+                | None ->
+                    heap))) heap id_list
+          in
+          mk_domain heap' logs
     
 
   let pp_session_name _node fmt = F.pp_print_string fmt "C/C++ semantic summary analysis" 
@@ -362,7 +385,7 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         let proc_data = ProcData.make_default proc_desc tenv in (
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
-          let opt_astate = Domain.optimize p ~scope:(Var.mk_scope (Typ.Procname.to_string proc_name)) in
+          let opt_astate = Domain.optimize p ~scope:(VVar.mk_scope (Typ.Procname.to_string proc_name)) ~rm_tmp: true in
           (*L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
           L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in

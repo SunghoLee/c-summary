@@ -13,7 +13,22 @@ module L = Logging
 
 let widen_iter = 5
 
-module Var = struct
+let print_progress total cur = 
+  let total = float_of_int total in
+  let cur = float_of_int cur in
+  let base = if total <. 100.0 then 1.0 else total /. 100.0 in
+  let c = cur /. base in
+  let t = ( total /. base ) -. c in
+  let str = ref "" in
+  for i = 1 to (int_of_float c) do 
+      str := !str ^ "="
+  done;
+  for i = 1 to (int_of_float t) do
+      str := !str ^ " "
+  done;
+  L.progress "%s (%d / %d)\r" (!str ^ "|") (int_of_float cur) (int_of_float total)
+
+module VVar = struct
   type t = {name: string; proc: var_scope; kind: var_kind}
   [@@deriving compare]
 
@@ -84,7 +99,7 @@ end
 
 module Loc = struct
   type t = 
-  | Explicit of Var.t
+  | Explicit of VVar.t
   | Implicit of string
   | Const of const_type
   | Pointer of t
@@ -94,9 +109,11 @@ module Loc = struct
   [@@deriving compare]
 
   and const_type = 
-  | Integer of int
+  | Z of Z.t
   | String of string
   [@@deriving compare]
+
+  let is_temporal = function Explicit v -> VVar.is_temporal v | _ -> false
 
   let is_explicit = function Explicit _ -> true | _ -> false
 
@@ -118,7 +135,7 @@ module Loc = struct
 
   let mk_implicit s = Implicit s
 
-  let mk_const_of_int i = Const (Integer i)
+  let mk_const_of_z i = Const (Z i)
 
   let mk_const_of_string s = Const (String s)
 
@@ -136,14 +153,14 @@ module Loc = struct
 
   let unwrap_ptr = function Pointer i -> i | _ -> failwith "it is not a pointer."
 
-  let of_id ?proc id = Var.of_id ?proc id |> mk_explicit
+  let of_id ?proc id = VVar.of_id ?proc id |> mk_explicit
 
-  let of_pvar ?proc pvar = Var.of_pvar ?proc pvar |> mk_explicit
+  let of_pvar ?proc pvar = VVar.of_pvar ?proc pvar |> mk_explicit
 
   let rec is_in scope loc =
     match loc with
     | Explicit var ->
-        Var.is_in scope var 
+        VVar.is_in scope var 
     | Implicit _ ->
         true
     | Const _ ->
@@ -155,12 +172,12 @@ module Loc = struct
     | Offset (b, i) ->
         is_in scope b
     | Ret s ->
-        (Var.scope_to_string scope) = s
+        (VVar.scope_to_string scope) = s
 
   let rec leq_const lhs rhs =
     match lhs, rhs with
-    | Integer lhs_int, Integer rhs_int ->
-        lhs_int = rhs_int
+    | Z lhs_int, Z rhs_int ->
+        Z.(lhs_int = rhs_int)
     | String lhs_str, String rhs_str ->
         lhs_str = rhs_str
     | _ ->
@@ -169,7 +186,7 @@ module Loc = struct
   and ( <= ) lhs rhs =
     match lhs, rhs with
     | Explicit lhs_const, Explicit rhs_const ->
-        (Var.compare lhs_const rhs_const) = 0
+        (VVar.compare lhs_const rhs_const) = 0
     | Implicit lhs_str, Implicit rhs_str ->
         lhs_str = rhs_str
     | Const lhs_const, Const rhs_const ->
@@ -186,7 +203,7 @@ module Loc = struct
         false
 
   let rec pp fmt = function
-    | Explicit i -> F.fprintf fmt "EX#%a(%a)" Var.pp i Var.pp_var_scope i
+    | Explicit i -> F.fprintf fmt "EX#%a(%a)" VVar.pp i VVar.pp_var_scope i
     | Implicit i -> F.fprintf fmt "IM#%s" i
     | Const i -> F.fprintf fmt "CONST#%a" pp_const i
     | Pointer p -> F.fprintf fmt "*(%a)" pp p
@@ -194,7 +211,7 @@ module Loc = struct
     | Offset (l, i) -> F.fprintf fmt "%a@%a" pp l pp i
     | Ret s -> F.fprintf fmt "RET#%s" s
   and pp_const fmt = function
-    | Integer i -> F.fprintf fmt "%d" i
+    | Z i -> F.fprintf fmt "%a" Z.pp_print i
     | String s -> F.fprintf fmt "%s" s
 
   let to_string i = F.asprintf "%a" pp i
@@ -430,18 +447,16 @@ module Cst = struct
   end
 
   module SMTSolver = struct
-    let ctx = 
-      let cfg = [("model", "true")] in
-      mk_context cfg
+    let ctx = mk_context []
 
-    let simplify cst =
+    let simplify l cst =
       match SimpleCSTSolver.simplify cst with
       | SOLVED cst' ->
           cst'
       | UNSOLVED ->
-          (*let () = L.progress "\t => Complex contraint: Using Z3 for solving." in*)
           let expr = Z3Encoder.encode ctx cst in
-          Expr.simplify expr None |> Z3Encoder.decode 
+          Expr.simplify expr None |> Z3Encoder.decode
+
 
     let is_sat cst = 
       let expr = Z3Encoder.encode ctx cst in
@@ -475,10 +490,12 @@ module Val = struct
 
   let ( < ) lhs rhs = (lhs <= rhs) && (lhs <> rhs)
 
-  let join = union
-
-  let widen ~prev ~next =
-    join prev next
+  let add (l, cst) v =
+    match find_first_opt (fun (lv, cstv) -> l = lv) v with
+    | Some (l, cstv) ->
+        add (l, Cst.cst_or cst cstv) (remove (l, cstv) v)
+    | None ->
+        add (l, cst) v
 
   let pp fmt avs = 
     if is_empty avs then 
@@ -486,14 +503,35 @@ module Val = struct
     else
       pp fmt avs
 
-  let optimize avs = 
-    (fun (value, cst) avs -> 
-      match Cst.SMTSolver.simplify cst with
+  let union v1 v2 =
+    let inter_v1, disjoint_v1 = partition (fun (l1, _) -> exists (fun (l2, _) -> l1 = l2) v2) v1 in
+    let inter_v2, disjoint_v2 = partition (fun (l2, _) -> exists (fun (l1, _) -> l1 = l2) v1) v2 in
+    let inter_merged_v = map (fun (l2, cst2) -> 
+        let l1, cst1 = filter (fun (l1, cst1) -> l1 = l2) inter_v1 |> min_elt in
+        (l1, Cst.cst_or cst1 cst2)) inter_v2
+    in
+    union (union inter_merged_v disjoint_v1) disjoint_v2
+
+  let join = union
+
+  let widen ~prev ~next =
+    join prev next
+
+  let optimize ?mornitor ?base_i avs = 
+      let mornitor = match mornitor with Some m -> m | None -> (fun x -> ()) in
+      let base_i = match base_i with Some i -> i | None -> 0 in
+      let i = ref 0 in
+      let res = (fun (value, cst) avs -> 
+          let () = i := !i + 1 in
+          let () = mornitor (base_i + !i) in
+      match Cst.SMTSolver.simplify value cst with
       | False ->
           avs
       | _ as cst' ->
           add (value, cst') avs)
     |> (fun f -> fold f avs empty)
+      in
+      res
 end 
 
 module InstEnv = struct
@@ -502,6 +540,8 @@ module InstEnv = struct
   include (M: module type of M with type 'a t := 'a M.t)
 
   type t = Val.t M.t
+
+  let size ienv = fold (fun l v i -> i + (Val.cardinal v)) ienv 0
 
   let rec find loc ienv =
     match find_opt loc ienv with
@@ -520,11 +560,21 @@ module InstEnv = struct
   let pp = pp ~pp_value: Val.pp
 
   let optimize ienv =
-    fold 
+      let start_gettimeofday = Unix.gettimeofday () in
+      let total = (size ienv) in
+      let () = L.progress "#IENV optimizing(%d)!\n@." total in
+      let cur = ref 0 in
+      let pp = print_progress total in
+      let res = fold 
       (fun loc v ienv ->
-        let v' = Val.optimize v in
+        let v' = Val.optimize v ~mornitor:pp ~base_i:!cur in
+        let () = cur := (Val.cardinal v) + !cur in
         if Val.is_empty v' then ienv else add loc v' ienv)
-      ienv empty
+      ienv empty in
+      let end_gettimeofday = Unix.gettimeofday () in
+      let () = L.progress "\n\tDone IENV Opt: %f\n@." (end_gettimeofday -. start_gettimeofday) in
+      res
+
 end
 
 module Heap = struct
@@ -536,6 +586,8 @@ module Heap = struct
   type t = Val.t M.t
 
   let pp = pp ~pp_value:Val.pp
+
+  let size h = fold (fun l v i -> i + (Val.cardinal v)) h 0
 
   let compare h1 h2 =
     (fun avs1 avs2 ->
@@ -576,7 +628,7 @@ module Heap = struct
   let weak_update loc v heap =
     match find_opt loc heap with
     | Some v' -> 
-        add loc (Val.union v v') heap
+        add loc (Val.union v' v) heap
     | None ->
         add loc v heap
 
@@ -638,31 +690,41 @@ module Heap = struct
           let to_vertex = get_vertex loc g in
           add_edge from_vertex to_vertex) value; g) heap (init ())
 
-    let get_closure locs g = 
+    let get_closure locs heap g = 
       let module VSet = PrettyPrintable.MakePPSet(Vertex) in
-      let rec impl acc queue =
+      let rec impl acc visited queue =
         if (Caml.Queue.length queue) = 0 then
           acc
         else
           let v = Caml.Queue.pop queue in
-          let acc' = Caml.List.fold_left (fun acc v ->
-              if not (VSet.mem v acc) then
-                (Caml.Queue.push v queue; VSet.add v acc)
+          let acc', visited' = Caml.List.fold_left (fun (acc, visited) v ->
+              if not (VSet.mem v visited) then
+                let l = ID2LocMap.find v.id g.imap in
+                (Caml.Queue.push v queue; 
+                (match find_opt l heap with
+                | Some v' ->
+                    add l v' acc
+                | None ->
+                    acc), VSet.add v visited)
               else
-                acc)
-            acc v.og
+                acc, visited)
+            (acc, visited) v.og
           in
-          impl acc' queue
+          impl acc' visited' queue
       in
-      let vertexes = Caml.List.map (fun l -> LocVertexMap.find l g.vmap) locs in
+      let vertexes = Caml.List.fold_left (fun vl l -> (LocVertexMap.find l g.vmap) :: vl) [] locs in
+      let heap' = Caml.List.fold_left (fun h l -> add l (find l heap) h) empty locs in
       let queue = Caml.Queue.create () in
-      ((Caml.Queue.add_seq queue (Caml.List.to_seq vertexes); impl (VSet.of_seq (Caml.List.to_seq vertexes)) queue)
-      |> VSet.fold (fun (v: Vertex.t) loc_set -> LocSet.add (ID2LocMap.find v.id g.imap) loc_set)) LocSet.empty
+      (Caml.Queue.add_seq queue (Caml.List.to_seq vertexes); impl heap' (VSet.of_seq (Caml.List.to_seq vertexes)) queue)
   end
 
   let opt_cst_in_heap heap =
+    let total = (size heap) in
+    let cur = ref 0 in
+    let pp = print_progress total in
     let opt_v_heap = fun loc v heap ->
-      let v' = Val.optimize v in
+      let v' = Val.optimize v ~mornitor:pp ~base_i:!cur in
+      let () = cur := (Val.cardinal v) + !cur in
       if Val.is_empty v' then
         heap
       else
@@ -670,19 +732,20 @@ module Heap = struct
     in
     fold opt_v_heap heap empty
 
-  let optimize ?scope ?flocs heap = 
+  let optimize ?scope ?flocs ?rm_tmp heap = 
+    let no_rm_tmp = match rm_tmp with Some true -> false | None -> true in
     let () = L.progress "#Start Heap Optimization\n@." in
-    let start_time = Unix.time () in
+    let start_gettimeofday = Unix.gettimeofday () in
     let is_seed = 
       match scope with
       | Some p ->
-          Loc.is_in p
+          fun l -> Loc.is_in p l && (no_rm_tmp || not (Loc.is_temporal l))
       | None ->
-          fun (loc: Loc.t) -> match loc with Explicit _ -> true | _ -> false
+          fun (loc: Loc.t) -> match loc with Explicit _ when (no_rm_tmp || not (Loc.is_temporal loc)) -> true | _ -> false
     in
     let hdg = HeapDepGraph.make heap in
-    let seed_time = Unix.time () in
-    let () = L.progress "\t Found seeds: %f\n@." (seed_time -. start_time) in
+    let seed_gettimeofday = Unix.gettimeofday () in
+    let () = L.progress "\t Found seeds: %f\n@." (seed_gettimeofday -. start_gettimeofday) in
     let locs = (
       match flocs with
       | Some s ->
@@ -690,14 +753,14 @@ module Heap = struct
       | None -> 
           fold (fun loc _ ls -> if is_seed loc then loc :: ls else ls) heap [])
     in
-    let locs_time = Unix.time () in
-    let () = L.progress "\t Initial Locs: %f\n@." (locs_time -. seed_time) in
-    let loc_closure = HeapDepGraph.get_closure locs hdg in
-    let closure_time = Unix.time () in
-    let () = L.progress "\t Found Closures: %f\n@." (closure_time -. locs_time) in
-    let res = filter (fun loc _ -> LocSet.mem loc loc_closure) heap |> opt_cst_in_heap in
-    let filtering_time = Unix.time () in
-    let () = L.progress "\t Filtering: %f\n@." (filtering_time -. closure_time) in
+    let locs_gettimeofday = Unix.gettimeofday () in
+    let () = L.progress "\t Initial Locs: %f\n@." (locs_gettimeofday -. seed_gettimeofday) in
+    let heap' = HeapDepGraph.get_closure locs heap hdg in
+    let closure_gettimeofday = Unix.gettimeofday () in
+    let () = L.progress "\t Found Closures: %f\n@." (closure_gettimeofday -. locs_gettimeofday) in
+    let res = opt_cst_in_heap heap' in
+    let opt_gettimeofday = Unix.gettimeofday () in
+    let () = L.progress "\n\t Opt: %f\n@." (opt_gettimeofday -. closure_gettimeofday) in
     let () = L.progress "\t Done.\n@." in
     res
 
@@ -707,7 +770,7 @@ module Heap = struct
     let () = L.progress "#Start Heap Optimization.\n@." in
     let lhs' = opt_cst_in_heap lhs in
     let rhs' = opt_cst_in_heap rhs in
-    let () = L.progress "\tDone.\n@." in
+    let () = L.progress "\n\tDone.\n@." in
     union (fun key val1 val2 -> Some (Val.join val1 val2)) lhs' rhs'
 
   let widen ~prev ~next =
@@ -894,21 +957,21 @@ module Domain = struct
     else 
       join prev next 
 
-  let rm_redundant ?scope {heap; logs} = 
+  let rm_redundant ?scope ?rm_tmp {heap; logs} = 
     let non_temp_locs = 
       (match scope with
       | Some f -> 
-          [Loc.mk_ret (Var.scope_to_string f)]
+          [Loc.mk_ret (VVar.scope_to_string f)]
           |> Heap.fold (fun loc _ loclist -> if Loc.is_explicit loc then loc::loclist else loclist) heap
       | None ->
           Heap.fold (fun loc _ loclist -> if Loc.is_explicit loc then loc::loclist else loclist) heap [])
     in
-    let heap' = Heap.optimize heap (*~flocs:non_temp_locs*) ?scope in
+    let heap' = Heap.optimize heap (*~flocs:non_temp_locs*) ?scope ?rm_tmp in
     let logs' = CallLogs.optimize ?scope logs in
     make heap' logs'
 
-  let optimize ?scope astate = 
-    rm_redundant astate ?scope
+  let optimize ?scope ?rm_tmp astate = 
+    rm_redundant astate ?scope ?rm_tmp
 
   let pp fmt { heap; logs } =
     F.fprintf fmt "===\n%a\n%a\n===" Heap.pp heap CallLogs.pp logs

@@ -7,46 +7,70 @@ open SemanticSummaryDomain
 open Pervasives
 open SUtils
 
+let print_progress total cur = 
+  let total = float_of_int total in
+  let cur = float_of_int cur in
+  let base = if total <. 100.0 then 1.0 else total /. 100.0 in
+  let c = cur /. base in
+  let t = ( total /. base ) -. c in
+  let str = ref "" in
+  for i = 1 to (int_of_float c) do 
+      str := !str ^ "="
+  done;
+  for i = 1 to (int_of_float t) do
+      str := !str ^ " "
+  done;
+  L.progress "%s (%d / %d)\r" (!str ^ "|") (int_of_float cur) (int_of_float total)
+
 let rec fp_mk_ienv caller_scope callee_heap caller_heap ienv =
+  let module Cache = PrettyPrintable.MakePPMap(Loc) in
+  let cache = ref Cache.empty in
   let rec expand ((loc: Loc.t), _) ienv =
-    match loc with
-    | Offset (base, index) ->
-        let ienv' = expand (base, Cst.cst_true) ienv |> expand (index, Cst.cst_true) in
-        let ins_base = InstEnv.find base ienv' in
-        let ins_index = InstEnv.find index ienv' in
-        Helper.(ins_base * ins_index) 
-        |> Caml.List.fold_left (fun ienv ((b, b_cst), (i, i_cst)) -> 
-            InstEnv.add loc (Val.singleton (Loc.mk_offset b i, Cst.cst_and b_cst i_cst)) ienv) ienv'
-    | Pointer base ->
-        let ienv' = expand (base, Cst.cst_true) ienv in
-        let ins_base = InstEnv.find base ienv' in
-        Val.fold 
-          (fun (b, cst) ienv ->
-            (match Heap.find_opt b caller_heap with
-            | Some v ->
-                InstEnv.add loc Helper.(v ^ cst) ienv
-            | None ->
-                if Loc.is_in caller_scope b || Loc.is_in Var.glob_scope b then
-                  let ptr = Loc.mk_pointer b in
-                  InstEnv.add loc (Val.singleton (ptr, cst)) ienv
-                else ienv))
-          ins_base ienv'
-    | _ -> 
-        ienv
+    try InstEnv.add loc (Cache.find loc !cache) ienv with _ ->
+      match loc with
+      | Offset (base, index) ->
+          let ienv' = expand (base, Cst.cst_true) ienv |> expand (index, Cst.cst_true) in
+          let ins_base = InstEnv.find base ienv' in
+          let ins_index = InstEnv.find index ienv' in
+          Helper.(ins_base * ins_index) 
+          |> Caml.List.fold_left (fun ienv ((b, b_cst), (i, i_cst)) -> 
+              let v = Val.singleton (Loc.mk_offset b i, Cst.cst_and b_cst i_cst) in
+              cache := Cache.add loc v !cache;
+              InstEnv.add loc v ienv) ienv'
+      | Pointer base ->
+          let ienv' = expand (base, Cst.cst_true) ienv in
+          let ins_base = InstEnv.find base ienv' in
+          Val.fold 
+            (fun (b, cst) ienv ->
+              (match Heap.find_opt b caller_heap with
+              | Some v ->
+                  let v' = Helper.(v ^ cst) in
+                  cache := Cache.add loc v' !cache;
+                  InstEnv.add loc v' ienv
+              | None ->
+                  if Loc.is_in caller_scope b || Loc.is_in VVar.glob_scope b then
+                    let ptr = Loc.mk_pointer b in
+                    let v = (Val.singleton (ptr, cst)) in
+                    cache := Cache.add loc v !cache;
+                    InstEnv.add loc v ienv
+                  else ienv))
+            ins_base ienv'
+      | _ -> 
+          ienv
   in
   let fold_f loc value ienv = expand (loc, Cst.cst_true) ienv |> Val.fold expand value in
-  let ienv' = Heap.fold fold_f callee_heap ienv in
-  if InstEnv.equal (fun a b -> Val.equal a b) ienv ienv' then
-    ienv
-  else
-    fp_mk_ienv caller_scope callee_heap caller_heap ienv'
+  Heap.fold fold_f callee_heap ienv
 
 (* construct an instantiation environment at call sites. *)
 let mk_ienv tenv caller_scope params args callee_heap caller_heap = 
+    let start_gettimeofday = Unix.gettimeofday () in
+    let () = L.progress "#Start making IEnv\n@." in
   let all_params = (GlobalEnv.get_glob_pvars () 
       |> Caml.List.map (fun (glob, typ) -> (Loc.of_pvar glob), Typ.mk (Tptr (typ, Pk_pointer))))
     @ Caml.List.map (fun (param, typ) -> (Loc.mk_explicit param), Typ.mk (Tptr (typ, Pk_pointer))) params
   in
+  let all_param_gettimeofday = Unix.gettimeofday () in
+    let () = L.progress "\t AllParams: %f\n@." (all_param_gettimeofday -. start_gettimeofday) in
   let heap' = Caml.List.fold_left2
     (fun heap (param, typ) arg -> Heap.add param arg heap)
     caller_heap all_params args
@@ -56,7 +80,8 @@ let mk_ienv tenv caller_scope params args callee_heap caller_heap =
     InstEnv.empty all_params
   in
   let res = fp_mk_ienv caller_scope callee_heap heap' ienv |> InstEnv.optimize in
-  (*let () = L.progress "IENV: %a\n@." InstEnv.pp res in*)
+  let end_gettimeofday = Unix.gettimeofday () in
+  let () = L.progress "\tDone.: %f\n@." (end_gettimeofday -. start_gettimeofday) in
   res
 
 (* instantiate a constraint *)
@@ -94,7 +119,9 @@ let inst_value v ienv =
 let comp_heap base caller callee ienv = 
   let f = fun (loc: Loc.t) v base -> 
     match loc with
-    | Explicit _ | Implicit _ | Ret _ ->
+    | Explicit _ ->
+        base
+    | Implicit _ | Ret _ ->
         Heap.add loc (inst_value v ienv) base 
     | _ ->
         let ival = inst_value v ienv in
@@ -102,7 +129,11 @@ let comp_heap base caller callee ienv =
           let pre_v = Heap.find loc' caller in
           let merged_v = Helper.((ival ^ cst) 
             + (pre_v ^ (Cst.cst_not cst))) in
-          Heap.weak_update loc' merged_v base
+          let merged_v' = Val.optimize merged_v in
+          if (Val.is_empty merged_v') then
+            base
+          else
+            Heap.weak_update loc' merged_v' base
         in
         let iloc_v = InstEnv.find loc ienv in
         Val.fold update_val iloc_v base

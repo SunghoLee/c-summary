@@ -65,7 +65,7 @@ let store lhs rhs heap =
     let new_v = rhs ^ cst in
     let merged_v = pre_v' + new_v in
     Heap.add loc merged_v heap 
-    |> Heap.add (Loc.mk_offset loc (Loc.mk_const_of_int 0)) merged_v (* special handling for array: *array = array[0] *)
+    |> Heap.add (Loc.mk_offset loc (Loc.mk_const_of_z Z.zero)) merged_v (* special handling for array: *array = array[0] *)
   in
   Val.fold f lhs heap
 
