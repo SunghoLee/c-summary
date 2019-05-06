@@ -61,7 +61,7 @@ let stanzas =
  (flags (%s))
  (ocamlopt_flags (%s))
  (libraries %s)
- (modules :standard \ %s infertop SemanticSummaryTest LocParser LocLexer Yloc JavaGenerator JoustPretty JoustSource JoustSyntax)
+ (modules :standard \ %s infertop SemanticSummaryTest LocParser LocLexer Yloc JavaGenerator JavaGeneratorModels JoustPretty JoustSource JoustSyntax)
  (preprocess (pps ppx_compare ppx_sexp_conv -no-check))
 )
 
@@ -73,7 +73,7 @@ let stanzas =
 (test
  (name SemanticSummaryTest)
  (flags (-open InferModules))
- (libraries InferModules) 
+ (libraries InferModules)
  (modules SemanticSummaryTest Yloc LocLexer LocParser)
  (preprocess (pps ppx_compare ppx_sexp_conv -no-check))
 )
@@ -82,7 +82,7 @@ let stanzas =
   (name JavaGenerator)
   (flags (-open InferModules))
   (libraries InferModules)
-  (modules JavaGenerator JoustPretty JoustSource JoustSyntax)
+  (modules JavaGenerator JavaGeneratorModels JoustPretty JoustSource JoustSyntax)
   (preprocess (pps ppx_compare ppx_sexp_conv -no-check)))
 
 (documentation

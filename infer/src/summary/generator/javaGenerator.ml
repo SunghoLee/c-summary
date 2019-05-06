@@ -7,6 +7,7 @@ module Y = JoustSyntax
 module P = JoustPretty
 module F = Format
 
+module M = JavaGeneratorModels.SimpleGen
 
 (* Util *)
 (* make_string: make comp_unit into string(java code) *)
@@ -51,7 +52,7 @@ let mk_unit package decls =
 (* get_all_procs: load all procs from infer-out *)
 let get_all_procs () =
   InferBase.ResultsDir.assert_results_dir "";
-  Procedures.get_all (fun x y -> true) () 
+  Procedures.get_all (fun x y -> true) ()
 
 (* get_semantic_summary: load semantic summary from infer-out *)
 let get_semantic_summary f =
@@ -134,7 +135,7 @@ let parse_type typ = InferIR.Typ.(match typ with
         | _ -> raise ParseException
       in Y.TypeName [ident x]
   | { desc = Tvoid; _ } -> simple_type "void"
-  | { desc = Tptr ({ desc = Tstruct c; _}, Pk_pointer); _ } -> 
+  | { desc = Tptr ({ desc = Tstruct c; _}, Pk_pointer); _ } ->
     extract_struct_name c
     |> (function
         | "_jobject" -> "Object"
@@ -167,17 +168,28 @@ let parse_formals (formals: (InferIR.Mangled.t * InferIR.Typ.t) list) =
                    v_name = ident (InferIR.Mangled.to_string m) 0 })) in
   s, res
 
+
+let sort_logs =
+  let cmp {LogUnit.call_sites=c1} {LogUnit.call_sites=c2} =
+    CallSite.compare_list c1 c2 in
+  List.sort cmp
+
+
+let parse_body name {heap; logs} =
+  CallLogs.fold (fun e l -> e :: l) logs []
+  |> sort_logs
+  |> M.method_body name heap
+
 (* Generator *)
-module PkgCls = struct
+module PkgClss = Map.Make(struct
   type t = string list * string
   let compare a b = compare a b
-end
-module PkgClss = Map.Make(PkgCls)
+end)
 
 (* insert_method: insert method into PkgClss-Methods map *)
-let insert_method pkgclss (pkg, cls, mth, sign) static ret_type formals ss =
+let insert_method pkgclss (pkg, cls, mth, sign) static ret_type formals body =
   let mods = [Y.Public] @ if static then [Y.Static] else [] in
-  let m = mk_method mods mth ret_type formals [] (Y.Block []) in
+  let m = mk_method mods mth ret_type formals [] body in
   PkgClss.update
     (pkg, cls)
     (fun x -> match x with
@@ -190,7 +202,10 @@ let gen_cmpls pkgclss =
   PkgClss.fold
     (fun (pkg, cls) a b ->
       let c = mk_public_class cls (List.map (fun x -> Y.Method x) a) in
-      mk_unit (Some (List.map ident pkg)) [Y.Class c] :: b)
+      let p = match pkg with
+        | [] -> None
+        | _ -> Some (List.map ident pkg) in
+      mk_unit p [Y.Class c] :: b)
     pkgclss []
 
 (* each_proc: process for procedures *)
@@ -202,12 +217,13 @@ let each_proc res proc =
   | None -> res
   | Some s -> match s.Summary.payloads.Payloads.semantic_summary with
     | None -> res
-    | Some ss -> 
+    | Some ss ->
       let attr = Summary.get_attributes s in
       let ret_type = parse_type (attr.ret_type) in
       let static, formals = parse_formals attr.formals in
-      insert_method res parsed static ret_type formals ss
-      
+      let body = Y.Block (parse_body procname ss) in
+      insert_method res parsed static ret_type formals body
+
 (* generate: generate compilation_units from infer-out *)
 let generate () =
   let procs = get_all_procs () in
@@ -217,7 +233,7 @@ let generate () =
 
 (* MAIN *)
 let _ =
-  let key = "t" in
+  let key = "0506" in
   print_string "----------------------------------------\n";
   print_string ("KEY = " ^ key ^ "\n");
   print_string "## [JavaGenerator]\n";
