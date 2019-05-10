@@ -316,6 +316,8 @@ module TransferFunctions = struct
                     args_v
                 in
                 let ienv = Instantiation.mk_ienv tenv scope (fun_params callee_desc) args_v' end_heap heap'' in
+                let () = L.progress "# Start composition.\n@." in
+                let start_gettimeofday = Unix.gettimeofday () in
                 let heap''' = Instantiation.comp_heap heap'' heap'' end_heap ienv in
                 (*let () = print_to_file heap'' end_heap heap''' ienv in
                 let () = Caml.List.iter (fun arg_v -> L.progress "ARG: %a\n@." Val.pp arg_v) args_v' in 
@@ -323,6 +325,8 @@ module TransferFunctions = struct
                 let _ = read_line () in*)
                 let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
                 let logs' = Instantiation.comp_log cs logs end_logs heap''' ienv in
+                let end_gettimeofday = Unix.gettimeofday () in
+                let () = L.progress "\tDone: %f\n@." (end_gettimeofday -. start_gettimeofday) in
                 let ret_addr = Loc.mk_ret_of_pname callee_pname in
                 let heap'''' = 
                   (match Heap.find_opt ret_addr heap''' with

@@ -767,7 +767,7 @@ module Heap = struct
 
   let join lhs rhs = 
     (* TODO: need to revise this for performance *)
-    let () = L.progress "#Start Heap Optimization.\n@." in
+    let () = L.progress "#Start Heap Optimization in Join!!.\n@." in
     let lhs' = opt_cst_in_heap lhs in
     let rhs' = opt_cst_in_heap rhs in
     let () = L.progress "\n\tDone.\n@." in
