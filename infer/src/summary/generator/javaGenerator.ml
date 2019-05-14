@@ -7,7 +7,9 @@ module Y = JoustSyntax
 module P = JoustPretty
 module F = Format
 
-module M = JavaGeneratorModels.SimpleGen
+module M = JavaGeneratorModels.SimpleModel
+
+module ProcInfo = JavaGeneratorModels.ProcInfo
 
 (* Util *)
 (* make_string: make comp_unit into string(java code) *)
@@ -100,8 +102,8 @@ let unescape_java_name name =
 
 (* parse_java_name: parse function name. *)
 let parse_java_name name =
-  try unescape_java_name name
-  with _ -> ["___C"], "___Fn", name, None
+  try true, unescape_java_name name
+  with _ -> false, (["___C"], "___Fn", name, None)
 
 (* extract_struct_name: extract struct/class name from type *)
 let extract_struct_name c = InferIR.Typ.(match c with
@@ -159,15 +161,28 @@ let parse_type typ = InferIR.Typ.(match typ with
   | _ -> raise ParseException)
 
 (* parse_formals: parse formals. make static + formals *)
-let parse_formals (formals: (InferIR.Mangled.t * InferIR.Typ.t) list) =
-  let f = List.tl formals in
-  let s = is_jclass (snd (List.hd f)) in
-  let res = List.tl f |> List.map (fun (m, t) ->
-              Y.({ v_mods = [];
-                   v_type = parse_type t;
-                   v_name = ident (InferIR.Mangled.to_string m) 0 })) in
-  s, res
-
+let parse_formals is_java
+                  (formals: (InferIR.Mangled.t * InferIR.Typ.t) list) =
+  let f = List.map (fun (m, t) ->
+            Y.({ v_mods = [];
+                 v_type = parse_type t;
+                 v_name = ident (InferIR.Mangled.to_string m) 0 })) in
+  if is_java
+  then
+    let fs = List.tl formals in
+    let is_static = is_jclass (snd (List.hd fs)) in
+    let res = List.tl fs |> f in
+    let env, this = match formals with
+      | (e, _) :: (t, _) :: _ ->
+        InferIR.Mangled.to_string e, InferIR.Mangled.to_string t
+      | _ -> failwith "env argument is not found" in
+    let kind =
+      if is_static
+      then ProcInfo.Static (env, this)
+      else ProcInfo.Method (env, this) in
+    kind, is_static, res
+  else
+    ProcInfo.C, false, (*f formals*) []
 
 let sort_logs =
   let cmp {LogUnit.call_sites=c1} {LogUnit.call_sites=c2} =
@@ -187,12 +202,15 @@ module PkgClss = Map.Make(struct
 end)
 
 (* insert_method: insert method into PkgClss-Methods map *)
-let insert_method pkgclss (pkg, cls, mth, sign) static ret_type formals body =
-  let mods = [Y.Public] @ if static then [Y.Static] else [] in
+let insert_method pkgclss (pkg, cls, mth, sign)
+                  static ret_type formals body =
+  let mods = [Y.Public] @ if static
+                          then [Y.Static]
+                          else [] in
   let m = mk_method mods mth ret_type formals [] body in
   PkgClss.update
     (pkg, cls)
-    (fun x -> match x with
+    (function
      | None -> Some [m]
      | Some s -> Some (m :: s))
     pkgclss
@@ -211,7 +229,8 @@ let gen_cmpls pkgclss =
 (* each_proc: process for procedures *)
 let each_proc res proc =
   let procname = InferIR.Typ.Procname.to_string proc in
-  let parsed = parse_java_name procname in
+  let is_java, parsed = parse_java_name procname in
+  let _, _, method_name, _ = parsed in
   let summ = Summary.get proc in
   match summ with
   | None -> res
@@ -220,9 +239,12 @@ let each_proc res proc =
     | Some ss ->
       let attr = Summary.get_attributes s in
       let ret_type = parse_type (attr.ret_type) in
-      let static, formals = parse_formals attr.formals in
-      let body = Y.Block (parse_body procname ss) in
-      insert_method res parsed static ret_type formals body
+      let kind, is_static, formals = parse_formals is_java attr.formals in
+      let proc = ProcInfo.({name = procname;
+                            kind = kind;
+                            ret_type = ret_type}) in
+      let body = Y.Block (parse_body proc ss) in
+      insert_method res parsed is_static ret_type formals body
 
 (* generate: generate compilation_units from infer-out *)
 let generate () =
@@ -233,7 +255,7 @@ let generate () =
 
 (* MAIN *)
 let _ =
-  let key = "0506" in
+  let key = "0514_001" in
   print_string "----------------------------------------\n";
   print_string ("KEY = " ^ key ^ "\n");
   print_string "## [JavaGenerator]\n";
