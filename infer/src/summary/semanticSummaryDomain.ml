@@ -612,7 +612,10 @@ module Heap = struct
     | Some v ->
         v
     | None ->
-        Val.singleton (Loc.mk_pointer l, Cst.cst_true)
+        if not (Loc.is_const l) then
+          Val.singleton (Loc.mk_pointer l, Cst.cst_true)
+        else
+          Val.empty
         (*Val.empty*)
 
   let ( <= ) lhs rhs =
@@ -770,6 +773,13 @@ module Heap = struct
     let () = L.progress "#Start Heap Optimization in Join!!.\n@." in
     let lhs' = opt_cst_in_heap lhs in
     let rhs' = opt_cst_in_heap rhs in
+    let oc_lhs = open_out "lhs_heap.txt" in
+    let oc_rhs = open_out "rhs_heap.txt" in
+    let () = Printf.fprintf oc_lhs "%s" (Format.asprintf "%a" pp lhs') in
+    let () = Printf.fprintf oc_rhs "%s" (Format.asprintf "%a" pp rhs') in
+    let () = close_out oc_lhs in
+    let () = close_out oc_rhs in
+    let _ = read_line () in
     let () = L.progress "\n\tDone.\n@." in
     union (fun key val1 val2 -> Some (Val.join val1 val2)) lhs' rhs'
 

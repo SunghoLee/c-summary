@@ -169,7 +169,12 @@ module TransferFunctions = struct
           (fun (obj_addr, obj_addr_cst) v -> Helper.(((Heap.find obj_addr heap) ^ obj_addr_cst) + v))
           obj_addr_v Val.empty
         in
-        Val.map (fun (obj_loc, obj_cst) -> Loc.mk_offset obj_loc field, obj_cst) obj_v
+        Val.fold (fun (obj_loc, obj_cst) vals -> 
+          if not (Loc.is_const obj_loc) then
+            Val.add (Loc.mk_offset obj_loc field, obj_cst) vals
+          else vals)
+        obj_v Val.empty
+        (*Val.map (fun (obj_loc, obj_cst) -> Loc.mk_offset obj_loc field, obj_cst) obj_v*)
     | Lindex (e1, e2) -> (* &(e1[e2]) *)
         let index_v = exec_expr scope location heap e2 in (* value of e2 *)
         let arr_v = exec_expr scope location heap e1 in (* address of e1 *)

@@ -138,8 +138,10 @@ let comp_heap base caller callee ienv =
         let iloc_v = InstEnv.find loc ienv in
         Val.fold update_val iloc_v base
   in
-  let new_heap = Heap.fold f callee Heap.empty in
-  Heap.fold Heap.add new_heap base
+  Heap.fold f callee base
+  (*
+  let new_heap = Heap.fold f callee base in
+  Heap.fold Heap.add new_heap base*)
 
 (* compose caller and callee logs at call instructions. *)
 let comp_log call_site base callee_logs caller_heap ienv = 
