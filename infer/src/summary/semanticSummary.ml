@@ -26,14 +26,15 @@ module AnalysisTargets = struct
     Marshal.to_channel oc targets' [];
     Pervasives.close_out oc
 
-  let is_targeted proc_name = 
+  let is_targeted proc_name = true
+  (*
     if JniModel.is_jni proc_name then
       false
     else if JniModel.is_callable_from_java proc_name then
       true
     else 
       let res = load_targets () in
-      Targets.mem proc_name res 
+      Targets.mem proc_name res *)
 
   let add_target proc_name = 
     store_target proc_name 

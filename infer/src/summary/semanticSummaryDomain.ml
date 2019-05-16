@@ -99,6 +99,7 @@ end
 
 module Loc = struct
   type t = 
+  | LocTop 
   | Explicit of VVar.t
   | Implicit of string
   | Const of const_type
@@ -112,6 +113,28 @@ module Loc = struct
   | Z of Z.t
   | String of string
   [@@deriving compare]
+
+  let klimit = 10 
+
+  let rec get_k = function
+  | LocTop -> 
+      100000
+  | Explicit _ ->
+      1
+  | Implicit _ ->
+      1
+  | Const _ ->
+      1
+  | Pointer l ->
+      1 + (get_k l)
+  | FunPointer _ ->
+      1
+  | Offset (b, _) ->
+      1 + (get_k b)
+  | Ret _ ->
+      1
+
+  let is_top = function LocTop -> true | _ -> false
 
   let is_temporal = function Explicit v -> VVar.is_temporal v | _ -> false
 
@@ -139,7 +162,11 @@ module Loc = struct
 
   let mk_const_of_string s = Const (String s)
 
-  let mk_pointer i = Pointer i
+  let mk_pointer i = 
+    if (get_k i) <= klimit then
+      Pointer i
+    else 
+      LocTop
 
   let mk_fun_pointer i = FunPointer i
 
@@ -147,7 +174,11 @@ module Loc = struct
 
   let mk_ret_of_pname pname = Typ.Procname.to_string pname |> mk_ret
 
-  let mk_offset l i = Offset (l, i)
+  let mk_offset l i = 
+    if (get_k l) <= klimit then
+      Offset (l, i)
+    else
+      LocTop
 
   let get_base = function Offset (l, i) -> l | _ -> failwith "it is not an offset."
 
@@ -159,6 +190,8 @@ module Loc = struct
 
   let rec is_in scope loc =
     match loc with
+    | LocTop ->
+        true
     | Explicit var ->
         VVar.is_in scope var 
     | Implicit _ ->
@@ -185,6 +218,10 @@ module Loc = struct
 
   and ( <= ) lhs rhs =
     match lhs, rhs with
+    | _, LocTop ->
+        true
+    | LocTop, _ -> 
+        false
     | Explicit lhs_const, Explicit rhs_const ->
         (VVar.compare lhs_const rhs_const) = 0
     | Implicit lhs_str, Implicit rhs_str ->
@@ -203,6 +240,7 @@ module Loc = struct
         false
 
   let rec pp fmt = function
+    | LocTop -> F.fprintf fmt "LOCTOP"
     | Explicit i -> F.fprintf fmt "EX#%a(%a)" VVar.pp i VVar.pp_var_scope i
     | Implicit i -> F.fprintf fmt "IM#%s" i
     | Const i -> F.fprintf fmt "CONST#%a" pp_const i
@@ -640,21 +678,32 @@ module Heap = struct
 
   module HeapDepGraph = struct
 
-    module Vertex = struct
-      type t = {id: int (* unique id *); mutable ig: t list; mutable og: t list}
-      [@@deriving compare]
-
-      let make cur_id = {id = cur_id; ig = []; og = []}
-
-      let pp fmt v = Format.fprintf fmt "V#%d" v.id
-    end
-
     module LocVertexMap = PrettyPrintable.MakePPMap(Loc)
     module ID2LocMap = PrettyPrintable.MakePPMap(Int)
+
+    module Vertex = struct
+      module VertexIdSet = PrettyPrintable.MakePPSet(Int)
+
+      type t = {id: int (* unique id *); mutable ig: VertexIdSet.t; mutable og: VertexIdSet.t}
+      [@@deriving compare]
+
+      let make cur_id = {id = cur_id; ig = VertexIdSet.empty; og = VertexIdSet.empty}
+
+      let pp fmt v = Format.fprintf fmt "V#%d" v.id
+
+      let pp_name imap fmt v = 
+        Format.fprintf fmt "V#%a" Loc.pp (ID2LocMap.find v.id imap);
+        VertexIdSet.iter (fun id -> 
+          Format.fprintf fmt "\n\t-> V#%a" Loc.pp (ID2LocMap.find id imap)) v.og
+    end
 
     let id = ref 1
 
     type graph = {mutable vmap: Vertex.t LocVertexMap.t; mutable imap: Loc.t ID2LocMap.t}
+
+    let pp_graph fmt g = 
+      LocVertexMap.iter (fun loc v ->
+        Format.fprintf fmt "%a\n" (Vertex.pp_name g.imap) v) g.vmap
 
     let init () = {vmap = LocVertexMap.empty; imap = ID2LocMap.empty}
 
@@ -674,22 +723,27 @@ module Heap = struct
        new_vertex loc g
 
     let add_edge (src: Vertex.t) (dst: Vertex.t) = 
-      src.og <- dst :: src.og
-      ; dst.ig <- src :: dst.ig
+      src.og <- Vertex.VertexIdSet.add dst.id src.og
+      ; dst.ig <- Vertex.VertexIdSet.add src.id dst.ig
 
     let make heap = 
+      let rec cedge (loc: Loc.t) g =
+        match loc with
+        | Pointer base ->
+            let tov = get_vertex loc g in
+            let fromv = get_vertex base g in
+            add_edge fromv tov; cedge base g
+        | Offset (base, _) ->
+            let tov = get_vertex loc g in
+            let fromv = get_vertex base g in
+            add_edge fromv tov; cedge base g
+        | _ -> ()
+      in
       fold (fun loc value g ->
-        let from_vertex = get_vertex loc g in (
-          if Loc.is_pointer loc then
-            let base = Loc.unwrap_ptr loc in
-            let ffrom_vertex = get_vertex base g in
-            add_edge ffrom_vertex from_vertex
-          else if Loc.is_offset loc then
-            let base = Loc.get_base loc in
-            let ffrom_vertex = get_vertex base g in
-            add_edge ffrom_vertex from_vertex
-        );
+        cedge loc g;
+        let from_vertex = get_vertex loc g in 
         Val.iter (fun (loc, _) ->
+          cedge loc g;
           let to_vertex = get_vertex loc g in
           add_edge from_vertex to_vertex) value; g) heap (init ())
 
@@ -700,7 +754,8 @@ module Heap = struct
           acc
         else
           let v = Caml.Queue.pop queue in
-          let acc', visited' = Caml.List.fold_left (fun (acc, visited) v ->
+          let acc', visited' = Vertex.VertexIdSet.fold (fun vid (acc, visited) ->
+            let v = LocVertexMap.find (ID2LocMap.find vid g.imap) g.vmap in
               if not (VSet.mem v visited) then
                 let l = ID2LocMap.find v.id g.imap in
                 (Caml.Queue.push v queue; 
@@ -711,7 +766,7 @@ module Heap = struct
                     acc), VSet.add v visited)
               else
                 acc, visited)
-            (acc, visited) v.og
+            v.og (acc, visited)
           in
           impl acc' visited' queue
       in
@@ -742,11 +797,12 @@ module Heap = struct
     let is_seed = 
       match scope with
       | Some p ->
-          fun l -> Loc.is_in p l && (no_rm_tmp || not (Loc.is_temporal l))
+          fun l -> (Loc.is_in p l || Loc.is_in VVar.glob_scope l) && (no_rm_tmp || not (Loc.is_temporal l))
       | None ->
           fun (loc: Loc.t) -> match loc with Explicit _ when (no_rm_tmp || not (Loc.is_temporal loc)) -> true | _ -> false
     in
     let hdg = HeapDepGraph.make heap in
+    let () = L.progress "PPGRAPH: %a\n@." HeapDepGraph.pp_graph hdg in
     let seed_gettimeofday = Unix.gettimeofday () in
     let () = L.progress "\t Found seeds: %f\n@." (seed_gettimeofday -. start_gettimeofday) in
     let locs = (
@@ -762,6 +818,8 @@ module Heap = struct
     let closure_gettimeofday = Unix.gettimeofday () in
     let () = L.progress "\t Found Closures: %f\n@." (closure_gettimeofday -. locs_gettimeofday) in
     let res = opt_cst_in_heap heap' in
+    let () = L.progress "Before: %a\n@." pp heap in
+    let () = L.progress "Clousre: %a\n@." pp heap' in
     let opt_gettimeofday = Unix.gettimeofday () in
     let () = L.progress "\n\t Opt: %f\n@." (opt_gettimeofday -. closure_gettimeofday) in
     let () = L.progress "\t Done.\n@." in
@@ -779,11 +837,17 @@ module Heap = struct
     let () = Printf.fprintf oc_rhs "%s" (Format.asprintf "%a" pp rhs') in
     let () = close_out oc_lhs in
     let () = close_out oc_rhs in
-    let _ = read_line () in
     let () = L.progress "\n\tDone.\n@." in
-    union (fun key val1 val2 -> Some (Val.join val1 val2)) lhs' rhs'
+    let res = union (fun key val1 val2 -> Some (Val.join val1 val2)) lhs' rhs' in
+    let oc_res = open_out "res_heap.txt" in
+    let () = Printf.fprintf oc_res "%s" (Format.asprintf "%a" pp res) in
+    let () = close_out oc_res in
+    (*let _ = read_line () in*)
+    res
 
   let widen ~prev ~next =
+    join prev next
+    (*
     (fun loc prev_v_opt next_v_opt ->
       match prev_v_opt, next_v_opt with
       | None, _ | _, None ->
@@ -791,6 +855,7 @@ module Heap = struct
       | Some prev_v, Some next_v ->
           Some (Val.widen ~prev:prev_v ~next:next_v))
     |> (fun f -> merge f prev next)
+    *)
 
 end
 

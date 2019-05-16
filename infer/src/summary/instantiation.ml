@@ -81,7 +81,11 @@ let mk_ienv tenv caller_scope params args callee_heap caller_heap =
   in
   let res = fp_mk_ienv caller_scope callee_heap heap' ienv |> InstEnv.optimize in
   let end_gettimeofday = Unix.gettimeofday () in
+  let oc = open_out "ienv.txt" in
+  let () = Printf.fprintf oc "%s" (Format.asprintf "%a" InstEnv.pp res) in
+  let () = close_out oc in
   let () = L.progress "\tDone.: %f\n@." (end_gettimeofday -. start_gettimeofday) in
+  (*let _ = read_line () in*)
   res
 
 (* instantiate a constraint *)
@@ -126,6 +130,7 @@ let comp_heap base caller callee ienv =
     | _ ->
         let ival = inst_value v ienv in
         let update_val = fun (loc', cst) base -> 
+          (* TODO: need to strong update! because caller's value remain after instantiation! *)
           let pre_v = Heap.find loc' caller in
           let merged_v = Helper.((ival ^ cst) 
             + (pre_v ^ (Cst.cst_not cst))) in
@@ -133,12 +138,23 @@ let comp_heap base caller callee ienv =
           if (Val.is_empty merged_v') then
             base
           else
-            Heap.weak_update loc' merged_v' base
+            Heap.add loc' merged_v' base
         in
         let iloc_v = InstEnv.find loc ienv in
         Val.fold update_val iloc_v base
   in
-  Heap.fold f callee base
+  let res = Heap.fold f callee base in
+  let oc = open_out "compheap.txt" in
+  let oc_caller = open_out "callerheap.txt" in
+  let oc_callee = open_out "calleeheap.txt" in
+  let () = Printf.fprintf oc "%s" (Format.asprintf "%a" Heap.pp res) in
+  let () = Printf.fprintf oc_caller "%s" (Format.asprintf "%a" Heap.pp base) in
+  let () = Printf.fprintf oc_callee "%s" (Format.asprintf "%a" Heap.pp callee) in
+  let () = close_out oc in
+  let () = close_out oc_caller in
+  let () = close_out oc_callee in
+  (*let _ = read_line () in*)
+  res
   (*
   let new_heap = Heap.fold f callee base in
   Heap.fold Heap.add new_heap base*)
