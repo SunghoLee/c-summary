@@ -7,6 +7,8 @@ module Y = JoustSyntax
 module P = JoustPretty
 module F = Format
 
+module H = JavaGeneratorModels.ModelHelper
+module S = JavaGeneratorModels.State
 module M = JavaGeneratorModels.SimpleModel
 
 module ProcInfo = JavaGeneratorModels.ProcInfo
@@ -51,21 +53,29 @@ let mk_unit package decls =
 
 (* Main *)
 
-(* get_all_procs: load all procs from infer-out *)
+(* get_all_procs: load all procs from infer-out
+ * return is `string * bool`, the 1st is Proc and the 2nd is whether the proc
+ * is entry *)
 let get_all_procs () =
+  let rec reorder ent o lst = match lst with
+    | [] -> ent @ o
+    | x :: xs ->
+      if List.mem (InferIR.Typ.Procname.to_string x) M.possible_entries
+      then reorder ((x, true) :: ent) o xs
+      else reorder ent ((x, false) :: o) xs in
   InferBase.ResultsDir.assert_results_dir "";
   Procedures.get_all (fun x y -> true) ()
+  |> reorder [] []
 
 (* get_semantic_summary: load semantic summary from infer-out *)
 let get_semantic_summary f =
   let proc_opt = get_all_procs () |>
-    Caml.List.find_opt (fun p -> (InferIR.Typ.Procname.to_string p) = f) in
+    Caml.List.find_opt (fun (p, _) -> (InferIR.Typ.Procname.to_string p) = f) in
   match proc_opt with
   | None -> None
-  | Some p -> match Summary.get p with
+  | Some (p, _) -> match Summary.get p with
     | None -> None
-    | Some s ->
-      match s.Summary.payloads.Payloads.semantic_summary with
+    | Some s -> match s.Summary.payloads.Payloads.semantic_summary with
       | None -> None
       | Some _ as o -> o
 
@@ -154,11 +164,11 @@ let parse_type typ = InferIR.Typ.(match typ with
         | "_jfloatArray" -> "float[]"
         | "_jdoubleArray" -> "double[]"
         | "_jobjectArray" -> "Object[]"
-        | _ -> raise ParseException)
+        | _ -> "Unknown")
     |> simple_type
   | { desc = Tptr ({ desc = Tvoid; _}, Pk_pointer); _ } ->
     simple_type "Object"
-  | _ -> raise ParseException)
+  | _ -> simple_type "Unknown")
 
 (* parse_formals: parse formals. make static + formals *)
 let parse_formals is_java
@@ -190,10 +200,35 @@ let sort_logs =
   List.sort cmp
 
 
-let parse_body name {heap; logs} =
+let get_summary_k proc default cb =
+  let summ = Summary.get proc in
+  match summ with
+  | None -> default ()
+  | Some s -> match s.Summary.payloads.Payloads.semantic_summary with
+    | None -> default ()
+    | Some ss -> cb s ss
+
+let parse_body state name {heap; logs} =
   CallLogs.fold (fun e l -> e :: l) logs []
   |> sort_logs
-  |> M.method_body name heap
+  |> M.method_body state name heap
+  
+let search_dynamic_fn_map procs =
+  let f_l lst log =
+    if LogUnit.get_jfun log = JF "_JNIEnv_RegisterNatives"
+    then lst
+    else lst in
+  let f_p lst proc = 
+    get_summary_k proc (fun () -> lst) (fun s {heap; logs} ->
+      CallLogs.fold (fun e l -> e :: l) logs []
+      |> sort_logs
+      |> List.fold_left f_l lst) in
+  let f lst proc =
+    let name = InferIR.Typ.Procname.to_string proc in
+    if List.mem name M.possible_entries
+    then f_p lst proc
+    else lst in
+  List.fold_left f [] procs
 
 (* Generator *)
 module PkgClss = Map.Make(struct
@@ -223,43 +258,66 @@ let gen_cmpls pkgclss =
       let p = match pkg with
         | [] -> None
         | _ -> Some (List.map ident pkg) in
-      mk_unit p [Y.Class c] :: b)
+      (pkg, cls, mk_unit p [Y.Class c]) :: b)
     pkgclss []
 
 (* each_proc: process for procedures *)
-let each_proc res proc =
+let each_proc state res (proc, is_ent) =
   let procname = InferIR.Typ.Procname.to_string proc in
   let is_java, parsed = parse_java_name procname in
-  let _, _, method_name, _ = parsed in
-  let summ = Summary.get proc in
-  match summ with
-  | None -> res
-  | Some s -> match s.Summary.payloads.Payloads.semantic_summary with
-    | None -> res
-    | Some ss ->
-      let attr = Summary.get_attributes s in
-      let ret_type = parse_type (attr.ret_type) in
-      let kind, is_static, formals = parse_formals is_java attr.formals in
-      let proc = ProcInfo.({name = procname;
-                            kind = kind;
-                            ret_type = ret_type}) in
-      let body = Y.Block (parse_body proc ss) in
-      insert_method res parsed is_static ret_type formals body
+  get_summary_k proc (fun () -> res) (fun s ss ->
+    let attr = Summary.get_attributes s in
+    let ret_type = parse_type (attr.ret_type) in
+    let kind, is_static, formals = parse_formals is_java attr.formals in
+    let proc = ProcInfo.({name = procname;
+                          kind = kind;
+                          ret_type = ret_type;
+                          is_entry = is_ent}) in
+    let body = Y.Block (parse_body state proc ss) in
+    let res' = S.fold_of_name state procname res
+      (fun name res -> insert_method res name is_static ret_type formals body)
+    in insert_method res' parsed is_static ret_type formals body)
 
 (* generate: generate compilation_units from infer-out *)
 let generate () =
   let procs = get_all_procs () in
   print_string ("#procs = " ^ string_of_int (List.length procs) ^ "\n");
-  List.fold_left each_proc PkgClss.empty procs
+  let state = S.mk_empty () in
+  List.fold_left (each_proc state) PkgClss.empty procs
   |> gen_cmpls
+
+(* write_as_files: generate java files from the result of `generate` *)
+let write_as_files base_dir result =
+  let cwd = Sys.getenv "INFER_CWD" in
+  Sys.chdir cwd;
+  Printf.printf "Make a directory \"%s\"...\n" base_dir;
+  (if Sys.file_exists base_dir
+  then if Sys.is_directory base_dir
+       then ()
+       else failwith ("there is a file named `" ^ base_dir ^ "`")
+  else let _ = Sys.command ("mkdir \"" ^ base_dir ^ "\"") in ());
+  Sys.chdir (cwd ^ "/" ^ base_dir);
+  List.iter (fun (pkg, cls, cmpl) ->
+               let d = if List.length pkg = 0
+                       then "."
+                       else String.concat "/" pkg in
+               let f = d ^ "/" ^ cls ^ ".java" in
+               Printf.printf "Make a file \"%s\"...\n" f;
+               let _ = Sys.command ("mkdir -p \"" ^ d ^ "\"") in
+               let oc = open_out f in
+               Printf.fprintf oc "%s" (make_string cmpl);
+               close_out oc)
+            result
 
 (* MAIN *)
 let _ =
-  let key = "0514_001" in
+  let key = "0516_006" in
   print_string "----------------------------------------\n";
   print_string ("KEY = " ^ key ^ "\n");
   print_string "## [JavaGenerator]\n";
-  generate ()
-  |> List.map make_string
+  let result = generate () in
+  write_as_files "java-gen-out" result;
+  result
+  |> List.map (fun (_, _, cmpl) -> make_string cmpl)
   |> String.concat "\n;;;\n"
   |> print_string
