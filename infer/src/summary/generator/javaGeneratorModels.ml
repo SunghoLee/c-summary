@@ -55,50 +55,100 @@ module ModelHelper = struct
   (* destruct Val.t and make Y.expr *)
   let simple_destruct_val v = Y.Literal (simple_destruct_val' v)
 
+
+  let string_is_enclosed_in prefix suffix str =
+    let pl = String.length prefix in
+    let sl = String.length suffix in
+    let l = String.length str in
+    if l < pl + sl then None
+    else
+      let rec eq_l i =
+        if i >= pl then true
+        else if prefix.[i] != str.[i] then false
+        else eq_l (i + 1) in
+      let rec eq_r i =
+        if i >= sl then true
+        else if suffix.[sl - i - 1] != str.[l - i - 1] then false
+        else eq_r (i + 1) in
+      if eq_l 0 && eq_r 0
+      then Some (String.sub str pl (l - sl - pl))
+      else None)
+
+  let jni_primitive_type_alist = [
+    "Boolean", "boolean";
+    "Byte", "byte";
+    "Char", "char";
+    "Short", "short";
+    "Int", "int";
+    "Long", "long";
+    "Float", "float";
+    "Double", "double" ]
+
+  let jni_name_pt_list = [
+    "Get", "Field";
+    "Call", "Method";
+    "GetStatic", "Field";
+    "CallStatic", "Method" ]
+
+  let jni_name_pt_array_list = [
+    "New", "Array" ]
+
+  let get_jni_pt_ret_type' (lst : (string * string) list) suffix name =
+    let rec f x = match x with
+      | [] -> None
+      | (p, s) :: xs -> match string_is_enclosed_in p s name with
+        | None -> f xs
+        | Some t -> match List.assoc_opt t jni_primitive_type_alist with
+          | None -> f xs
+          | Some t -> Some (t ^ suffix) in
+    f lst
+
+  let get_jni_pt_ret_type name =
+    print_string (name ^ "\n");
+    get_jni_pt_ret_type' jni_name_pt_list "" name
+
+  let get_jni_pt_array_ret_type name =
+    get_jni_pt_ret_type' jni_name_pt_array_list "[]" name
+
+  let jni_name_type_alist = [
+    "FindClass", "Class";
+    "GetSuperClass", "Class";
+    "GetObjectClass", "Class";
+    "IsInstanceOf", "boolean";
+    "IsSameObject", "boolean";
+    "GetMethodId", "Method";
+    "CallObjectMethod", "Object";
+    "CallIntMethod", "int";
+    "GetFieldID", "Field";
+    "GetObjectField", "Object";
+    "GetStaticMethodID", "Method";
+    "CallStaticObjectMethod", "Object";
+    "GetStaticFieldID", "Field";
+    "GetStaticObjectField", "Object";
+    "GetStaticIntField", "Int";
+    "GetStringLength", "int";
+    "NewStringUTF", "String";
+    "GetStringUTFLength", "int";
+    "GetStringUTFChars", "char[]";
+    "GetArrayLength", "int";
+    "NewObjectArray",  "Object[]";
+    "GetObjectArrayElement", "Object" ]
+
+  let get_jni_ret_type__procs = [
+    (fun x -> List.assoc_opt x jni_name_type_alist);
+    get_jni_pt_ret_type;
+    get_jni_pt_array_ret_type ]
+
   (* find return type of jni functions (by name) *)
   let get_jni_ret_type name =
-    let simple s = Some (Y.(TypeName [ident s 0])) in
-    match name with
-    | "FindClass" -> simple "Class"
-    | "GetSuperClass" -> simple "Class"
-    | "GetObjectClass" -> simple "Class"
-
-    | "GetMethodID" -> simple "Method"
-    | "CallObjectMethod" -> simple "Object"
-    | "CallIntMethod" -> simple "int"
-    | "CallVoidMethod" -> None
-
-    | "GetFieldID" -> simple "Field"
-    | "GetObjectField" -> simple "Object"
-    | "GetIntField" -> simple "int"
-    | "SetObjectField" -> None
-    | "SetIntField" -> None
-
-    | "GetStaticMethodID" -> simple "Method"
-    | "CallStaticObjectMethod" -> simple "Object"
-    | "CallStaticIntMethod" -> simple "int"
-    | "CallStaticVoidMethod" -> None
-
-    | "GetStaticFieldID" -> simple "Field"
-    | "GetStaticObjectField" -> simple "Object"
-    | "GetStaticIntField" -> simple "Int"
-    | "SetStaticObjectField" -> None
-    | "SetStaticIntField" -> None
-
-    | "GetStringLength" -> simple "int"
-
-    | "NewStringUTF" -> simple "String"
-    | "GetStringUTFLength" -> simple "int"
-    | "GetStringUTFChars" -> simple "char[]"
-    | "ReleaseStringUTFChars" -> None
-
-    | "GetArrayLength" -> simple "int"
-
-    | "NewObjectArray" -> simple "Object[]"
-    | "GetObjectArray" -> simple "Object"
-    | "SetObjectArray" -> None
-
-    | _ -> None
+    let rec reduce lst arg = match lst with
+      | [] -> None
+      | b :: bs -> match b arg with
+        | None -> reduce bs arg
+        | Some v -> Some v in
+    match reduce get_jni_ret_type__procs name with
+    | None -> None
+    | Some s -> Some Y.(TypeName [ident s 0])
 
   (* parse jni class signature and make list of Y.Ident *)
   let parse_class' cls =
@@ -119,10 +169,11 @@ module ModelHelper = struct
     | 'I' -> Y.TypeName [Y.ident "int" 0], 1
     | 'J' -> Y.TypeName [Y.ident "long" 0], 1
     | 'V' -> Y.TypeName [Y.ident "void" 0], 1
-    | 'L' ->
-      let i = String.index sign ';' in
-      let c = String.sub sign 1 (i - 2) in
-      parse_class c, i + 1
+    | 'L' -> (match String.index_opt sign ';' with
+      | None -> failwith "Parsing Signatures Failed"
+      | Some i ->
+        let c = String.sub sign 1 (i - 2) in
+        parse_class c, i + 1)
     | '[' ->
       let n = String.length sign in
       let t, p = parse_field_sig' (String.sub sign 1 (n - 1)) in
@@ -145,24 +196,24 @@ module ModelHelper = struct
     let ret = parse_field_sig (String.sub sign (c + 1) (n - c - 1)) in
     f [] (o + 1), ret
 
-  (* get string constant from heap *)
-  let rec get_string_from_heap loc heap =
+  let rec get_const_from_heap loc heap =
     match loc with
-    | Loc.Const (Loc.String s) -> Some s
+    | Loc.Const c -> Some c
     | _ -> match Heap.find_opt loc heap with
       | None -> None
       | Some x -> match Val.elements x with
         | [] -> None
-        | (l, c) :: xs -> get_string_from_heap l heap
+        | (l, c) :: xs -> get_const_from_heap l heap
 
-  let rec get_int_from_heap loc heap =
-    match loc with
-    | Loc.Const (Loc.Integer s) -> Some s
-    | _ -> match Heap.find_opt loc heap with
-      | None -> None
-      | Some x -> match Val.elements x with
-        | [] -> None
-        | (l, c) :: xs -> get_int_from_heap l heap
+  let get_string_from_heap loc heap =
+    match get_const_from_heap loc heap with
+    | Some (Loc.String s) -> Some s
+    | _ -> None
+
+  let get_int_from_heap loc heap =
+    match get_const_from_heap loc heap with
+    | Some (Loc.Integer i) -> Some i
+    | _ -> None
 
   (* get inner Loc.t from ptr#IM#*:*:arg* *)
   let unpack_arg heap loc = match loc with
@@ -280,18 +331,19 @@ module SimpleModel : GeneratorModel = struct
     match typ with
     | None -> Y.Expr init_val
     | Some typ ->
-      Y.LocalVar (Y.({f_var = {v_mods = [];
-                               v_type = typ;
-                               v_name = Y.ident name 0};
+      let f_var = Y.({v_mods = [];
+                      v_type = typ;
+                      v_name = Y.ident name 0}) in
+      Y.LocalVar (Y.({f_var = f_var;
                       f_init = Some (ExprInit init_val)}))
 
   let destruct_loc proc stk =
     function
       | Loc.Pointer (Loc.Explicit Loc.{name; proc = Proc p})
-       when p = ProcInfo.get_name proc ->
-        if name = ProcInfo.get_arg_name_this proc
-        then Y.Name [Y.ident "this" 0]
-        else Y.Name [Y.ident name 0]
+          when p = ProcInfo.get_name proc ->
+        let id = if name = ProcInfo.get_arg_name_this proc
+          then "this" else name in
+        Y.Name [Y.ident id 0]
       | x -> match H.simple_destruct_loc x with
         | Y.Name [id] when not (List.mem_assoc (Y.id_string id) stk) -> top
         | y -> y
@@ -304,30 +356,29 @@ module SimpleModel : GeneratorModel = struct
       | [] -> ()
       | cls' :: pkg_r ->
         let pkg = List.rev pkg_r in
+        let rec g cond i =
+          if not (cond i) then ()
+          else let l_arr = Loc.Offset (mths, Loc.Const (Loc.Integer i)) in
+               let l_ptr = Loc.Pointer l_arr in
+               let off s = Loc.Offset (l_ptr, Loc.Const (Loc.String s)) in
+               let find field =
+                 match Heap.find_opt (off field) heap with
+                 | None -> None
+                 | Some x -> match Val.elements x with
+                   | [l, c] -> Some l
+                   | _ -> None in
+               match find "fnPtr", find "signature", find "name" with
+               | Some (Loc.FunPointer fn_ptr),
+                 Some (Loc.Const (Loc.String sign)),
+                 Some (Loc.Const (Loc.String name)) ->
+                  State.add_registered state
+                     (InferIR.Typ.Procname.to_string fn_ptr)
+                     (pkg, cls', name, Some sign);
+                 g cond (i + 1)
+               | _ -> () in
         match H.get_int_from_heap n heap with 
-        | None -> ()
-        | Some n' ->
-          let rec g i =
-            if i < 0 then ()
-            else let l_arr = Loc.Offset (mths, Loc.Const (Loc.Integer i)) in
-                 let l_ptr = Loc.Pointer l_arr in
-                 let off s = Loc.Offset (l_ptr, Loc.Const (Loc.String s)) in
-                 let find field =
-                   match Heap.find_opt (off field) heap with
-                   | None -> None
-                   | Some x -> match Val.elements x with
-                     | [l, c] -> Some l
-                     | _ -> None in
-                 match find "fnPtr", find "signature", find "name" with
-                 | Some (Loc.FunPointer fn_ptr),
-                   Some (Loc.Const (Loc.String sign)),
-                   Some (Loc.Const (Loc.String name)) ->
-                    State.add_registered state
-                       (InferIR.Typ.Procname.to_string fn_ptr)
-                       (pkg, cls', name, Some sign);
-                   g (i - 1)
-                 | _ -> g (i - 1)
-          in g (n' - 1) )
+        | None -> g (fun _ -> true) 0
+        | Some n' -> g (fun x -> x < n') 0)
     | _ -> ()
 
   let update_stk state proc stk heap rloc fn args =

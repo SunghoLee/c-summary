@@ -22,10 +22,8 @@ let make_string comp =
   F.fprintf F.str_formatter "%s" old;
   s
 
-(* ident: make syntax identifier *)
-let ident name = Y.ident name 0
 (* simple_type: make syntax typename *)
-let simple_type name = Y.TypeName [ident name]
+let simple_type name = Y.TypeName [Y.ident name 0]
 
 (* mk_method: make syntax method *)
 let mk_method mods name ret_typ args throws body =
@@ -66,18 +64,6 @@ let get_all_procs () =
   InferBase.ResultsDir.assert_results_dir "";
   Procedures.get_all (fun x y -> true) ()
   |> reorder [] []
-
-(* get_semantic_summary: load semantic summary from infer-out *)
-let get_semantic_summary f =
-  let proc_opt = get_all_procs () |>
-    Caml.List.find_opt (fun (p, _) -> (InferIR.Typ.Procname.to_string p) = f) in
-  match proc_opt with
-  | None -> None
-  | Some (p, _) -> match Summary.get p with
-    | None -> None
-    | Some s -> match s.Summary.payloads.Payloads.semantic_summary with
-      | None -> None
-      | Some _ as o -> o
 
 exception ParseException
 
@@ -145,7 +131,7 @@ let parse_type typ = InferIR.Typ.(match typ with
         | FFloat -> "float"
         | FDouble -> "double"
         | _ -> raise ParseException
-      in Y.TypeName [ident x]
+      in Y.TypeName [Y.ident x 0]
   | { desc = Tvoid; _ } -> simple_type "void"
   | { desc = Tptr ({ desc = Tstruct c; _}, Pk_pointer); _ } ->
     extract_struct_name c
@@ -174,9 +160,9 @@ let parse_type typ = InferIR.Typ.(match typ with
 let parse_formals is_java
                   (formals: (InferIR.Mangled.t * InferIR.Typ.t) list) =
   let f = List.map (fun (m, t) ->
-            Y.({ v_mods = [];
-                 v_type = parse_type t;
-                 v_name = ident (InferIR.Mangled.to_string m) 0 })) in
+            Y.({v_mods = [];
+                v_type = parse_type t;
+                v_name = ident (InferIR.Mangled.to_string m) 0})) in
   if is_java
   then
     let fs = List.tl formals in
@@ -199,10 +185,8 @@ let sort_logs =
     CallSite.compare_list c1 c2 in
   List.sort cmp
 
-
 let get_summary_k proc default cb =
-  let summ = Summary.get proc in
-  match summ with
+  match Summary.get proc with
   | None -> default ()
   | Some s -> match s.Summary.payloads.Payloads.semantic_summary with
     | None -> default ()
@@ -213,35 +197,17 @@ let parse_body state name {heap; logs} =
   |> sort_logs
   |> M.method_body state name heap
   
-let search_dynamic_fn_map procs =
-  let f_l lst log =
-    if LogUnit.get_jfun log = JF "_JNIEnv_RegisterNatives"
-    then lst
-    else lst in
-  let f_p lst proc = 
-    get_summary_k proc (fun () -> lst) (fun s {heap; logs} ->
-      CallLogs.fold (fun e l -> e :: l) logs []
-      |> sort_logs
-      |> List.fold_left f_l lst) in
-  let f lst proc =
-    let name = InferIR.Typ.Procname.to_string proc in
-    if List.mem name M.possible_entries
-    then f_p lst proc
-    else lst in
-  List.fold_left f [] procs
-
 (* Generator *)
 module PkgClss = Map.Make(struct
   type t = string list * string
+
   let compare a b = compare a b
 end)
 
 (* insert_method: insert method into PkgClss-Methods map *)
 let insert_method pkgclss (pkg, cls, mth, sign)
                   static ret_type formals body =
-  let mods = [Y.Public] @ if static
-                          then [Y.Static]
-                          else [] in
+  let mods = [Y.Public] @ if static then [Y.Static] else [] in
   let m = mk_method mods mth ret_type formals [] body in
   PkgClss.update
     (pkg, cls)
@@ -257,7 +223,7 @@ let gen_cmpls pkgclss =
       let c = mk_public_class cls (List.map (fun x -> Y.Method x) a) in
       let p = match pkg with
         | [] -> None
-        | _ -> Some (List.map ident pkg) in
+        | _ -> Some (List.map (fun x -> Y.ident x 0) pkg) in
       (pkg, cls, mk_unit p [Y.Class c]) :: b)
     pkgclss []
 
@@ -311,7 +277,7 @@ let write_as_files base_dir result =
 
 (* MAIN *)
 let _ =
-  let key = "0516_006" in
+  let key = "0518_001" in
   print_string "----------------------------------------\n";
   print_string ("KEY = " ^ key ^ "\n");
   print_string "## [JavaGenerator]\n";
