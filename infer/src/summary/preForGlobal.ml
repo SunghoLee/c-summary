@@ -65,7 +65,7 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
                 if do_strip then
                   Domain.add pvar (Typ.strip_ptr t) m
                 else 
-                 Domain.add pvar t m
+                  Domain.add pvar t m
               else 
                   m
 
@@ -95,12 +95,11 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
           exec_expr astate' e2 typ true *)
       | Prune (e, loc, b, i) -> astate
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) -> 
-          (*
           if (Typ.Procname.to_string callee_pname) = "__variable_initialization" then
             Caml.List.fold_left (fun i (e, t) -> exec_expr i e t false) astate args
           else
-            Caml.List.fold_left (fun i (e, t) -> exec_expr i e t true) astate args*)
-          astate
+            Caml.List.fold_left (fun i (e, t) -> exec_expr i e t true) astate args
+          (* astate*)
       | Call ((id, typ_e1), _, args, loc, flag) -> 
           astate
           (* failwith "C does not support this!" *)

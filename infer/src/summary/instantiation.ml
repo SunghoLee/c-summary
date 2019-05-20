@@ -37,11 +37,13 @@ let rec fp_mk_ienv caller_scope callee_heap caller_heap ienv =
               let v = Val.singleton (Loc.mk_offset b i, Cst.cst_and b_cst i_cst) in
               cache := Cache.add loc v !cache;
               InstEnv.add loc v ienv) ienv'
-      | Pointer base ->
+      | Pointer (base, LocVar, _) ->
           let ienv' = expand (base, Cst.cst_true) ienv in
           let ins_base = InstEnv.find base ienv' in
           Val.fold 
             (fun (b, cst) ienv ->
+              InstEnv.add loc (Heap.find b caller_heap) ienv)
+              (*
               (match Heap.find_opt b caller_heap with
               | Some v ->
                   let v' = Helper.(v ^ cst) in
@@ -53,7 +55,7 @@ let rec fp_mk_ienv caller_scope callee_heap caller_heap ienv =
                     let v = (Val.singleton (ptr, cst)) in
                     cache := Cache.add loc v !cache;
                     InstEnv.add loc v ienv
-                  else ienv))
+                  else ienv))*)
             ins_base ienv'
       | _ -> 
           ienv
@@ -81,11 +83,7 @@ let mk_ienv tenv caller_scope params args callee_heap caller_heap =
   in
   let res = fp_mk_ienv caller_scope callee_heap heap' ienv |> InstEnv.optimize in
   let end_gettimeofday = Unix.gettimeofday () in
-  let oc = open_out "ienv.txt" in
-  let () = Printf.fprintf oc "%s" (Format.asprintf "%a" InstEnv.pp res) in
-  let () = close_out oc in
   let () = L.progress "\tDone.: %f\n@." (end_gettimeofday -. start_gettimeofday) in
-  (*let _ = read_line () in*)
   res
 
 (* instantiate a constraint *)
@@ -143,18 +141,7 @@ let comp_heap base caller callee ienv =
         let iloc_v = InstEnv.find loc ienv in
         Val.fold update_val iloc_v base
   in
-  let res = Heap.fold f callee base in
-  let oc = open_out "compheap.txt" in
-  let oc_caller = open_out "callerheap.txt" in
-  let oc_callee = open_out "calleeheap.txt" in
-  let () = Printf.fprintf oc "%s" (Format.asprintf "%a" Heap.pp res) in
-  let () = Printf.fprintf oc_caller "%s" (Format.asprintf "%a" Heap.pp base) in
-  let () = Printf.fprintf oc_callee "%s" (Format.asprintf "%a" Heap.pp callee) in
-  let () = close_out oc in
-  let () = close_out oc_caller in
-  let () = close_out oc_callee in
-  (*let _ = read_line () in*)
-  res
+  Heap.fold f callee base
   (*
   let new_heap = Heap.fold f callee base in
   Heap.fold Heap.add new_heap base*)

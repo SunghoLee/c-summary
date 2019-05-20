@@ -38,18 +38,18 @@ let rec to_domain ?file ?proc ?ln yloc =
   let scope = 
     match proc with
     | Some s ->
-        Var.mk_scope s
+        VVar.mk_scope s
     | None ->
-        Var.glob_scope
+        VVar.glob_scope
   in
   match yloc with
   | EX s -> 
-      Var.of_string ~proc:scope s
+      VVar.of_string ~proc:scope s
       |> Loc.mk_explicit 
   | GB s -> (
       match file with
       | Some f ->
-          Var.of_string ("#GB_" ^ f ^ "_" ^ s)
+          VVar.of_string ("#GB_" ^ f ^ "_" ^ s)
           |> Loc.mk_explicit 
       | None ->
           raise (NullFile "No specific file..."))
@@ -71,9 +71,9 @@ let rec to_domain ?file ?proc ?ln yloc =
       Loc.mk_offset base' index'
   | POINTER base ->
       let base' = to_domain ?file ?proc ?ln base in
-      Loc.mk_pointer base'
+      Loc.mk_concrete_pointer base'
   | CONST_INT i ->
-      Loc.mk_const_of_int i
+      Loc.mk_const_of_z (Z.of_int i)
   | CONST_STRING s ->
       Loc.mk_const_of_string s
   | RET ->

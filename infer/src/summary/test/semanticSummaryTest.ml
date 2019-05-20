@@ -109,6 +109,23 @@ let get_semantic_summary f =
   | None ->
       None
 
+let rec loc_to_vloc_loc (loc: Loc.t) =
+  match loc with
+  | LocTop | Explicit _ | Implicit _ | Const _ | FunPointer _ | Ret _ ->
+      loc
+  | Pointer (base, typ, _) ->
+      Pointer (loc_to_vloc_loc base, LocVar, false)
+  | Offset (base, offset) ->
+      Offset (loc_to_vloc_loc base, offset)
+
+let loc_to_vloc_val value = 
+  Val.fold (fun (l, cst) v -> Val.add (loc_to_vloc_loc l, cst) v) value Val.empty
+
+let loc_to_vloc_heap heap =
+  Heap.fold (fun l v h ->
+    Heap.add (loc_to_vloc_loc l) (loc_to_vloc_val v) h)
+    heap Heap.empty 
+
 let leq_val lhs_val rhs_val =
   (fun (lhs_loc, _) ->
     (fun (rhs_loc, _) ->
@@ -117,6 +134,8 @@ let leq_val lhs_val rhs_val =
   |> (fun f -> Val.for_all f lhs_val)
     
 let leq_heap lhs_heap rhs_heap =
+  let lhs_heap = loc_to_vloc_heap lhs_heap in
+  let rhs_heap = loc_to_vloc_heap rhs_heap in
   (fun loc lhs_val ->
     match Heap.find_opt loc rhs_heap with
     | Some rhs_val ->
