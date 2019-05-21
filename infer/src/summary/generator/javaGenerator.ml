@@ -45,7 +45,7 @@ let mk_public_class name body =
 (* mk_unit: make syntax compilation unit *)
 let mk_unit package decls =
   Y.({ package = package;
-       imports = [];
+       imports = [[ident "__Model.*" 0]];
        decls = decls;
        comments = [] })
 
@@ -99,7 +99,7 @@ let unescape_java_name name =
 (* parse_java_name: parse function name. *)
 let parse_java_name name =
   try true, unescape_java_name name
-  with _ -> false, (["___C"], "___Fn", name, None)
+  with _ -> false, ([M.c_fn_pkg_name], M.c_fn_class_name, name, None)
 
 (* extract_struct_name: extract struct/class name from type *)
 let extract_struct_name c = InferIR.Typ.(match c with
@@ -150,11 +150,11 @@ let parse_type typ = InferIR.Typ.(match typ with
         | "_jfloatArray" -> "float[]"
         | "_jdoubleArray" -> "double[]"
         | "_jobjectArray" -> "Object[]"
-        | _ -> "Unknown")
+        | _ -> M.model_pkg_name ^ ".Unknown")
     |> simple_type
   | { desc = Tptr ({ desc = Tvoid; _}, Pk_pointer); _ } ->
     simple_type "Object"
-  | _ -> simple_type "Unknown")
+  | _ -> simple_type (M.model_pkg_name ^ ".Unknown"))
 
 (* parse_formals: parse formals. make static + formals *)
 let parse_formals is_java
@@ -277,7 +277,7 @@ let write_as_files base_dir result =
 
 (* MAIN *)
 let _ =
-  let key = "0518_001" in
+  let key = "0522_000" in
   print_string "----------------------------------------\n";
   print_string ("KEY = " ^ key ^ "\n");
   print_string "## [JavaGenerator]\n";

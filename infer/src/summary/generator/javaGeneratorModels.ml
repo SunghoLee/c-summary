@@ -72,7 +72,7 @@ module ModelHelper = struct
         else eq_r (i + 1) in
       if eq_l 0 && eq_r 0
       then Some (String.sub str pl (l - sl - pl))
-      else None)
+      else None
 
   let jni_primitive_type_alist = [
     "Boolean", "boolean";
@@ -104,35 +104,74 @@ module ModelHelper = struct
     f lst
 
   let get_jni_pt_ret_type name =
-    print_string (name ^ "\n");
     get_jni_pt_ret_type' jni_name_pt_list "" name
 
   let get_jni_pt_array_ret_type name =
     get_jni_pt_ret_type' jni_name_pt_array_list "[]" name
 
   let jni_name_type_alist = [
-    "FindClass", "Class";
-    "GetSuperClass", "Class";
-    "GetObjectClass", "Class";
+    "GetVersion", "int";
+
+    "DefineClass", "__Class";
+    "FindClass", "__Class";
+    "GetSuperClass", "__Class";
+    "IsAssignableFrom", "boolean";
+
+    "Throw", "int";
+    "ThrowNew", "int";
+    "ExceptionOccurred", "Throwable";
+
+    "NewGlobalRef", "Object";
+    "EnsureLocalCapacity", "int";
+    "PushLocalFrame", "int";
+    "PopLocalFrame", "Object";
+    "NewLocalRef", "Object";
+
+    "AllocObject", "Object";
+    "NewObject", "Object";
+    "NewObjectA", "Object";
+    "NewObjectV", "Object";
+    "GetObjectClass", "__Class";
     "IsInstanceOf", "boolean";
     "IsSameObject", "boolean";
-    "GetMethodId", "Method";
-    "CallObjectMethod", "Object";
-    "CallIntMethod", "int";
-    "GetFieldID", "Field";
+
+    "GetFieldID", "__FieldID";
     "GetObjectField", "Object";
-    "GetStaticMethodID", "Method";
-    "CallStaticObjectMethod", "Object";
-    "GetStaticFieldID", "Field";
+
+    "GetMethodId", "__MethodID";
+    "CallObjectMethod", "Object";
+
+    "GetStaticFieldID", "__FieldID";
     "GetStaticObjectField", "Object";
-    "GetStaticIntField", "Int";
+    
+    "GetStaticMethodID", "__MethodID";
+    "CallStaticObjectMethod", "Object";
+
+    "NewString", "String";
     "GetStringLength", "int";
+    "GetStringChars", "__Pointer";
     "NewStringUTF", "String";
     "GetStringUTFLength", "int";
-    "GetStringUTFChars", "char[]";
+    "GetStringUTFChars", "__Pointer";
+
     "GetArrayLength", "int";
     "NewObjectArray",  "Object[]";
-    "GetObjectArrayElement", "Object" ]
+    "GetObjectArrayElement", "Object";
+    "GetPrimitiveArrayCritical", "__Pointer";
+
+    "MonitorEnter", "int";
+    "MonitorExit", "int";
+
+    "NewDirectByteBuffer", "Object";
+    "GetDirectBufferAddress", "__Pointer";
+    "GetDirectBufferCapacity", "long";
+
+    "FromReflectedMethod", "__MethodID";
+    "ToReflectedMethod", "java.lang.reflect.Method";
+    "FromReflectedMethod", "__FieldID";
+    "ToReflectedField", "java.lang.reflect.Field";
+
+    "GetJavaVM", "int" ]
 
   let get_jni_ret_type__procs = [
     (fun x -> List.assoc_opt x jni_name_type_alist);
@@ -285,6 +324,10 @@ end
 
 (*--------------------------------------------------------*)
 module type GeneratorModel = sig
+  (* package name of (JNI) model *)
+  val model_pkg_name : string
+  (* name of class containing pure c functions *)
+  val c_fn_pkg_name : string
   (* name of class containing pure c functions *)
   val c_fn_class_name : string
   (* name of class containing jni api (model) functions *)
@@ -307,7 +350,9 @@ end
  * - Variables are created for some JNI call with return values
  * - If it cannot specify arguments, it'll use TOP *)
 module SimpleModel : GeneratorModel = struct
-  let c_fn_class_name = "__C"
+  let model_pkg_name = "__Model"
+  let c_fn_pkg_name = "__C"
+  let c_fn_class_name = "Fn"
   let jni_class_name = "__JNI"
   let top_name = "TOP"
 
