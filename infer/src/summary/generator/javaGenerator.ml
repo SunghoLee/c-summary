@@ -118,7 +118,7 @@ let is_jclass typ = InferIR.Typ.(match typ with
      with _ -> false)
   | _ -> false )
 
-let unknown_type_name = M.model_pkg_name ^ ".Unknown"
+let unknown_type_name = M.model_pkg_name ^ ".__Unknown"
 (* parse_type: parse type and make syntax type
  * if given type may not be represented in Java, it'll return
  * `__Model.Unknown` *)

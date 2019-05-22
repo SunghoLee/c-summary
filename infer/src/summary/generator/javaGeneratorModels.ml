@@ -507,8 +507,12 @@ module SimpleModel : GeneratorModel = struct
     match Heap.fold f heap None with
     | None -> None
     | Some v ->
-      let v' = destruct_loc proc rets v in
-      let v'' = Y.Cast (ProcInfo.get_ret_type proc, v') in
+      let ret_type = ProcInfo.get_ret_type proc in
+      let v' = match ret_type with
+        | Y.TypeName [n] when Y.id_string n = model_pkg_name ^ ".__Unknown" ->
+          top
+        | _ -> destruct_loc proc rets v in
+      let v'' = Y.Cast (ret_type, v') in
       Some (Y.Return (Some v''))
 
   (* API *)
