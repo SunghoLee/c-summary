@@ -9,11 +9,12 @@ module F = Format
 module ModelHelper = struct
   (* make string `s` into java-compatible name *)
   let encode_name s =
-    let buf = Buffer.create (String.length s) in
+    let buf = Buffer.create (2 * String.length s) in
     for i = 0 to String.length s - 1 do
-      Buffer.add_char buf @@ match String.get s i with
-        | ':' -> '$'
-        | x -> x
+      match String.get s i with
+        | ':' -> Buffer.add_char buf '$'
+        | '$' -> Buffer.add_string buf "_$"
+        | x -> Buffer.add_char buf x
     done;
     Buffer.contents buf
 
@@ -74,21 +75,21 @@ module ModelHelper = struct
       then Some (String.sub str pl (l - sl - pl))
       else None
 
-  let jni_primitive_type_alist = [
-    "Boolean", "boolean";
-    "Byte", "byte";
-    "Char", "char";
-    "Short", "short";
-    "Int", "int";
-    "Long", "long";
-    "Float", "float";
-    "Double", "double" ]
+  let jni_primitive_type_alist =
+    [ "Boolean", "boolean";
+      "Byte", "byte";
+      "Char", "char";
+      "Short", "short";
+      "Int", "int";
+      "Long", "long";
+      "Float", "float";
+      "Double", "double" ]
 
-  let jni_name_pt_list = [
-    "Get", "Field";
-    "Call", "Method";
-    "GetStatic", "Field";
-    "CallStatic", "Method" ]
+  let jni_name_pt_list =
+    [ "Get", "Field";
+      "Call", "Method";
+      "GetStatic", "Field";
+      "CallStatic", "Method" ]
 
   let jni_name_pt_array_list = [
     "New", "Array" ]
@@ -109,74 +110,74 @@ module ModelHelper = struct
   let get_jni_pt_array_ret_type name =
     get_jni_pt_ret_type' jni_name_pt_array_list "[]" name
 
-  let jni_name_type_alist = [
-    "GetVersion", "int";
+  let jni_name_type_alist =
+    [ "GetVersion", "int";
 
-    "DefineClass", "__Class";
-    "FindClass", "__Class";
-    "GetSuperClass", "__Class";
-    "IsAssignableFrom", "boolean";
+      "DefineClass", "__Class";
+      "FindClass", "__Class";
+      "GetSuperClass", "__Class";
+      "IsAssignableFrom", "boolean";
 
-    "Throw", "int";
-    "ThrowNew", "int";
-    "ExceptionOccurred", "Throwable";
+      "Throw", "int";
+      "ThrowNew", "int";
+      "ExceptionOccurred", "Throwable";
 
-    "NewGlobalRef", "Object";
-    "EnsureLocalCapacity", "int";
-    "PushLocalFrame", "int";
-    "PopLocalFrame", "Object";
-    "NewLocalRef", "Object";
+      "NewGlobalRef", "Object";
+      "EnsureLocalCapacity", "int";
+      "PushLocalFrame", "int";
+      "PopLocalFrame", "Object";
+      "NewLocalRef", "Object";
 
-    "AllocObject", "Object";
-    "NewObject", "Object";
-    "NewObjectA", "Object";
-    "NewObjectV", "Object";
-    "GetObjectClass", "__Class";
-    "IsInstanceOf", "boolean";
-    "IsSameObject", "boolean";
+      "AllocObject", "Object";
+      "NewObject", "Object";
+      "NewObjectA", "Object";
+      "NewObjectV", "Object";
+      "GetObjectClass", "__Class";
+      "IsInstanceOf", "boolean";
+      "IsSameObject", "boolean";
 
-    "GetFieldID", "__FieldID";
-    "GetObjectField", "Object";
+      "GetFieldID", "__FieldID";
+      "GetObjectField", "Object";
 
-    "GetMethodId", "__MethodID";
-    "CallObjectMethod", "Object";
+      "GetMethodId", "__MethodID";
+      "CallObjectMethod", "Object";
 
-    "GetStaticFieldID", "__FieldID";
-    "GetStaticObjectField", "Object";
-    
-    "GetStaticMethodID", "__MethodID";
-    "CallStaticObjectMethod", "Object";
+      "GetStaticFieldID", "__FieldID";
+      "GetStaticObjectField", "Object";
+      
+      "GetStaticMethodID", "__MethodID";
+      "CallStaticObjectMethod", "Object";
 
-    "NewString", "String";
-    "GetStringLength", "int";
-    "GetStringChars", "__Pointer";
-    "NewStringUTF", "String";
-    "GetStringUTFLength", "int";
-    "GetStringUTFChars", "__Pointer";
+      "NewString", "String";
+      "GetStringLength", "int";
+      "GetStringChars", "__Pointer";
+      "NewStringUTF", "String";
+      "GetStringUTFLength", "int";
+      "GetStringUTFChars", "__Pointer";
 
-    "GetArrayLength", "int";
-    "NewObjectArray",  "Object[]";
-    "GetObjectArrayElement", "Object";
-    "GetPrimitiveArrayCritical", "__Pointer";
+      "GetArrayLength", "int";
+      "NewObjectArray",  "Object[]";
+      "GetObjectArrayElement", "Object";
+      "GetPrimitiveArrayCritical", "__Pointer";
 
-    "MonitorEnter", "int";
-    "MonitorExit", "int";
+      "MonitorEnter", "int";
+      "MonitorExit", "int";
 
-    "NewDirectByteBuffer", "Object";
-    "GetDirectBufferAddress", "__Pointer";
-    "GetDirectBufferCapacity", "long";
+      "NewDirectByteBuffer", "Object";
+      "GetDirectBufferAddress", "__Pointer";
+      "GetDirectBufferCapacity", "long";
 
-    "FromReflectedMethod", "__MethodID";
-    "ToReflectedMethod", "java.lang.reflect.Method";
-    "FromReflectedMethod", "__FieldID";
-    "ToReflectedField", "java.lang.reflect.Field";
+      "FromReflectedMethod", "__MethodID";
+      "ToReflectedMethod", "java.lang.reflect.Method";
+      "FromReflectedMethod", "__FieldID";
+      "ToReflectedField", "java.lang.reflect.Field";
 
-    "GetJavaVM", "int" ]
+      "GetJavaVM", "int" ]
 
-  let get_jni_ret_type__procs = [
-    (fun x -> List.assoc_opt x jni_name_type_alist);
-    get_jni_pt_ret_type;
-    get_jni_pt_array_ret_type ]
+  let get_jni_ret_type__procs =
+    [ (fun x -> List.assoc_opt x jni_name_type_alist);
+      get_jni_pt_ret_type;
+      get_jni_pt_array_ret_type ]
 
   (* find return type of jni functions (by name) *)
   let get_jni_ret_type name =
@@ -197,6 +198,8 @@ module ModelHelper = struct
     let e = parse_class' cls in
     Y.TypeName e
 
+  exception ParseSignatureError
+
   (* parse single jni type signature and return Y.typ * parse_end_position *)
   let rec parse_field_sig' sign =
     match String.get sign 0 with
@@ -209,7 +212,7 @@ module ModelHelper = struct
     | 'J' -> Y.TypeName [Y.ident "long" 0], 1
     | 'V' -> Y.TypeName [Y.ident "void" 0], 1
     | 'L' -> (match String.index_opt sign ';' with
-      | None -> failwith "Parsing Signatures Failed"
+      | None -> raise ParseSignatureError
       | Some i ->
         let c = String.sub sign 1 (i - 2) in
         parse_class c, i + 1)
@@ -217,10 +220,13 @@ module ModelHelper = struct
       let n = String.length sign in
       let t, p = parse_field_sig' (String.sub sign 1 (n - 1)) in
       Y.ArrayType t, p + 1
-    | _ -> failwith "Parsing Signatures Failed"
+    | _ -> raise ParseSignatureError
   (* parse single jni type signature and return Y.typ *)
   let parse_field_sig sign =
-    fst (parse_field_sig' sign)
+    let n, p = parse_field_sig' sign in
+    if p < String.length sign
+    then raise ParseSignatureError
+    else n
 
   (* parse method jni type signature and return args Y.typ s and ret Y.typ *)
   let parse_method_sig sign =
@@ -283,7 +289,7 @@ module State = struct
 
   let get_native state name = List.assoc_opt name state.registered
 
-  let fold_of_name state name init cb =
+  let fold_name_of state name init cb =
     let rec f l v = match l with
       | [] -> v
       | (c, j) :: xs when c = name -> cb j v |> f xs
@@ -426,6 +432,7 @@ module SimpleModel : GeneratorModel = struct
         | Some n' -> g (fun x -> x < n') 0)
     | _ -> ()
 
+  (* update_stk: push class/method/field information into stack *)
   let update_stk state proc stk heap rloc fn args =
     match fn, args with
     | "FindClass", [env; cls] ->

@@ -13,7 +13,7 @@ module M = JavaGeneratorModels.SimpleModel
 
 module ProcInfo = JavaGeneratorModels.ProcInfo
 
-(* Util *)
+(* -- Util -- *)
 (* make_string: make comp_unit into string(java code) *)
 let make_string comp =
   let old = F.flush_str_formatter () in
@@ -42,30 +42,31 @@ let mk_public_class name body =
        cl_impls = [];
        cl_body = body })
 
-(* mk_unit: make syntax compilation unit *)
-let mk_unit package decls =
+(* mk_compilation_unit: make syntax compilation unit *)
+let mk_compilation_unit package decls =
   Y.({ package = package;
        imports = [[ident "__Model.*" 0]];
        decls = decls;
        comments = [] })
 
-(* Main *)
+(* -- Main -- *)
 
 (* get_all_procs: load all procs from infer-out
  * return is `string * bool`, the 1st is Proc and the 2nd is whether the proc
  * is entry *)
 let get_all_procs () =
-  let rec reorder ent o lst = match lst with
-    | [] -> ent @ o
+  (* reorder: bring all possible entries to the front of the list *)
+  let rec reorder entries others lst = match lst with
+    | [] -> entries @ others
     | x :: xs ->
       if List.mem (InferIR.Typ.Procname.to_string x) M.possible_entries
-      then reorder ((x, true) :: ent) o xs
-      else reorder ent ((x, false) :: o) xs in
+      then reorder ((x, true) :: entries) others xs
+      else reorder entries ((x, false) :: others) xs in
   InferBase.ResultsDir.assert_results_dir "";
   Procedures.get_all (fun x y -> true) ()
   |> reorder [] []
 
-exception ParseException
+exception ParseException of string
 
 (* unescape_java_name: parse native function name in c for java *)
 let unescape_java_name name =
@@ -88,15 +89,18 @@ let unescape_java_name name =
   let res', sign = match String.split_on_char ':' res with
                    | [x] -> x, None
                    | [x; s] -> x, Some s
-                   | _ -> raise ParseException in
+                   | [] -> raise (ParseException "name is empty")
+                   | _ -> raise (ParseException "too many colons in name") in
   let pkg, cls, mth = match String.split_on_char ' ' res' with
                       | "Java" :: xs -> (match List.rev xs with
                         | mth :: cls :: pkg -> List.rev pkg, cls, mth
-                        | _ -> raise ParseException)
-                      | _ -> raise ParseException in
+                        | _ ->
+                          raise (ParseException "wrong format of java name"))
+                      | _ -> raise (ParseException "not java name") in
   pkg, cls, mth, sign
 
-(* parse_java_name: parse function name. *)
+(* parse_java_name: parse function name
+ *** IT DOES NOT HANDLE OVERLOEADED METHOD *)
 let parse_java_name name =
   try true, unescape_java_name name
   with _ -> false, ([M.c_fn_pkg_name], M.c_fn_class_name, name, None)
@@ -105,7 +109,7 @@ let parse_java_name name =
 let extract_struct_name c = InferIR.Typ.(match c with
   | CStruct n -> InferIR.QualifiedCppName.to_qual_string n
   | CppClass (n, _) -> InferIR.QualifiedCppName.to_qual_string n
-  | _ -> raise ParseException )
+  | _ -> raise (ParseException "unknown struct name") )
 
 (* is_jclass: check whether given type is 'jclass' *)
 let is_jclass typ = InferIR.Typ.(match typ with
@@ -114,7 +118,10 @@ let is_jclass typ = InferIR.Typ.(match typ with
      with _ -> false)
   | _ -> false )
 
-(* parse_type: parse type and make syntax type *)
+let unknown_type_name = M.model_pkg_name ^ ".Unknown"
+(* parse_type: parse type and make syntax type
+ * if given type may not be represented in Java, it'll return
+ * `__Model.Unknown` *)
 let parse_type typ = InferIR.Typ.(match typ with
   | { desc = Tint i; _ } ->
       let x = match i with
@@ -124,13 +131,13 @@ let parse_type typ = InferIR.Typ.(match typ with
         | IShort -> "short"
         | IInt -> "int"
         | ILongLong -> "long"
-        | _ -> raise ParseException
+        | _ -> unknown_type_name
       in simple_type x
   | { desc = Tfloat f; _ } ->
       let x = match f with
         | FFloat -> "float"
         | FDouble -> "double"
-        | _ -> raise ParseException
+        | _ -> unknown_type_name
       in Y.TypeName [Y.ident x 0]
   | { desc = Tvoid; _ } -> simple_type "void"
   | { desc = Tptr ({ desc = Tstruct c; _}, Pk_pointer); _ } ->
@@ -150,13 +157,13 @@ let parse_type typ = InferIR.Typ.(match typ with
         | "_jfloatArray" -> "float[]"
         | "_jdoubleArray" -> "double[]"
         | "_jobjectArray" -> "Object[]"
-        | _ -> M.model_pkg_name ^ ".Unknown")
+        | _ -> unknown_type_name)
     |> simple_type
   | { desc = Tptr ({ desc = Tvoid; _}, Pk_pointer); _ } ->
     simple_type "Object"
-  | _ -> simple_type (M.model_pkg_name ^ ".Unknown"))
+  | _ -> simple_type unknown_type_name)
 
-(* parse_formals: parse formals. make static + formals *)
+(* parse_formals: parse formals, and return (is_static, parsed_formals) *)
 let parse_formals is_java
                   (formals: (InferIR.Mangled.t * InferIR.Typ.t) list) =
   let f = List.map (fun (m, t) ->
@@ -180,11 +187,13 @@ let parse_formals is_java
   else
     ProcInfo.C, false, (*f formals*) []
 
+(* sort_logs: sort logs *)
 let sort_logs =
   let cmp {LogUnit.call_sites=c1} {LogUnit.call_sites=c2} =
     CallSite.compare_list c1 c2 in
   List.sort cmp
 
+(* get_summary_k: get procedure's summary and pass it to the callback `cb` *)
 let get_summary_k proc default cb =
   match Summary.get proc with
   | None -> default ()
@@ -198,6 +207,7 @@ let parse_body state name {heap; logs} =
   |> M.method_body state name heap
   
 (* Generator *)
+(* PkgClss: (key=Package-Class, value=methods) map *)
 module PkgClss = Map.Make(struct
   type t = string list * string
 
@@ -216,19 +226,19 @@ let insert_method pkgclss (pkg, cls, mth, sign)
      | Some s -> Some (m :: s))
     pkgclss
 
-(* gen_cmpls: make compilation_units from PkgClss-Methods map *)
-let gen_cmpls pkgclss =
+(* gen_compilation_units: make compilation_units from PkgClss-Methods map *)
+let gen_compilation_units pkgclss =
   PkgClss.fold
     (fun (pkg, cls) a b ->
       let c = mk_public_class cls (List.map (fun x -> Y.Method x) a) in
       let p = match pkg with
         | [] -> None
         | _ -> Some (List.map (fun x -> Y.ident x 0) pkg) in
-      (pkg, cls, mk_unit p [Y.Class c]) :: b)
+      (pkg, cls, mk_compilation_unit p [Y.Class c]) :: b)
     pkgclss []
 
-(* each_proc: process for procedures *)
-let each_proc state res (proc, is_ent) =
+(* each_proc_cb: process for procedures *)
+let each_proc_cb state res (proc, is_ent) =
   let procname = InferIR.Typ.Procname.to_string proc in
   let is_java, parsed = parse_java_name procname in
   get_summary_k proc (fun () -> res) (fun s ss ->
@@ -240,7 +250,7 @@ let each_proc state res (proc, is_ent) =
                           ret_type = ret_type;
                           is_entry = is_ent}) in
     let body = Y.Block (parse_body state proc ss) in
-    let res' = S.fold_of_name state procname res
+    let res' = S.fold_name_of state procname res
       (fun name res -> insert_method res name is_static ret_type formals body)
     in insert_method res' parsed is_static ret_type formals body)
 
@@ -249,8 +259,8 @@ let generate () =
   let procs = get_all_procs () in
   print_string ("#procs = " ^ string_of_int (List.length procs) ^ "\n");
   let state = S.mk_empty () in
-  List.fold_left (each_proc state) PkgClss.empty procs
-  |> gen_cmpls
+  List.fold_left (each_proc_cb state) PkgClss.empty procs
+  |> gen_compilation_units
 
 (* write_as_files: generate java files from the result of `generate` *)
 let write_as_files base_dir result =
@@ -263,23 +273,20 @@ let write_as_files base_dir result =
        else failwith ("there is a file named `" ^ base_dir ^ "`")
   else let _ = Sys.command ("mkdir \"" ^ base_dir ^ "\"") in ());
   Sys.chdir (cwd ^ "/" ^ base_dir);
-  List.iter (fun (pkg, cls, cmpl) ->
-               let d = if List.length pkg = 0
-                       then "."
-                       else String.concat "/" pkg in
-               let f = d ^ "/" ^ cls ^ ".java" in
+  List.iter (fun (pkg, cls, compl_unit) ->
+               let dir = if List.length pkg = 0
+                         then "."
+                         else String.concat "/" pkg in
+               let f = dir ^ "/" ^ cls ^ ".java" in
                Printf.printf "Make a file \"%s\"...\n" f;
-               let _ = Sys.command ("mkdir -p \"" ^ d ^ "\"") in
+               let _ = Sys.command ("mkdir -p \"" ^ dir ^ "\"") in
                let oc = open_out f in
-               Printf.fprintf oc "%s" (make_string cmpl);
+               Printf.fprintf oc "%s" (make_string compl_unit);
                close_out oc)
             result
 
 (* MAIN *)
 let _ =
-  let key = "0522_000" in
-  print_string "----------------------------------------\n";
-  print_string ("KEY = " ^ key ^ "\n");
   print_string "## [JavaGenerator]\n";
   let result = generate () in
   write_as_files "java-gen-out" result;
