@@ -139,7 +139,7 @@ module ModelHelper = struct
       "GetFieldID", "__FieldID";
       "GetObjectField", "Object";
 
-      "GetMethodId", "__MethodID";
+      "GetMethodID", "__MethodID";
       "CallObjectMethod", "Object";
 
       "GetStaticFieldID", "__FieldID";
