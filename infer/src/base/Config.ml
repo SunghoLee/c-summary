@@ -600,6 +600,7 @@ and ( annotation_reachability
     , loop_hoisting
     , nullsafe
     , ownership
+    , pointer_preanalysis
     , printf_args
     , pulse
     , purity
@@ -670,6 +671,9 @@ and ( annotation_reachability
     mk_checker ~long:"racerd" ~deprecated:["-threadsafety"] ~default:true
       "the RacerD thread safety analysis"
   and resource_leak = mk_checker ~long:"resource-leak" ""
+  and pointer_preanalysis =
+    mk_checker ~long:"pp" ~default:false
+      "preanalysis for alias calculations"
   and semantic_summary =
     mk_checker ~long:"ss" ~default:false
       "preanalysis for semantic summary generation"
@@ -735,6 +739,7 @@ and ( annotation_reachability
   , loop_hoisting
   , nullsafe
   , ownership
+  , pointer_preanalysis
   , printf_args
   , pulse
   , purity
@@ -2910,6 +2915,8 @@ and report_previous = !report_previous
 and reports_include_ml_loc = !reports_include_ml_loc
 
 and resource_leak = !resource_leak
+
+and pointer_preanalysis = !pointer_preanalysis
 
 and semantic_summary_pre = !semantic_summary_pre
 

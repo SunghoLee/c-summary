@@ -7,7 +7,7 @@ open SemanticSummaryDomain
 open SUtils
 
 module AnalysisTargets = struct
-  module Targets = PrettyPrintable.MakePPSet(Typ.Procname) 
+  module Targets = PrettyPrintable.MakePPMap(Typ.Procname) 
 
   let targets_dat = "targets.dat"
 
@@ -26,15 +26,14 @@ module AnalysisTargets = struct
     Marshal.to_channel oc targets' [];
     Pervasives.close_out oc
 
-  let is_targeted proc_name = true
-  (*
+  let is_targeted proc_name = 
     if JniModel.is_jni proc_name then
       false
     else if JniModel.is_callable_from_java proc_name then
       true
     else 
       let res = load_targets () in
-      Targets.mem proc_name res*)
+      Targets.mem proc_name res
 
   let add_target proc_name = 
     store_target proc_name 
@@ -424,8 +423,8 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
           let opt_astate = Domain.optimize p ~scope:(VVar.mk_scope (Typ.Procname.to_string proc_name)) ~rm_tmp: true in
-          (*L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
-          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
+          L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
+          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some opt_astate}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 

@@ -101,7 +101,7 @@ let rec inst_cst : Cst.t -> InstEnv.t -> Cst.t =
         let iloc2_v = InstEnv.find loc2 ienv in
         let iter_iloc1 = fun (iloc1, cst1) cst ->
           let iter_iloc2 = fun (iloc2, cst2) cst ->
-            Cst.cst_and (Cst.cst_and (Cst.cst_eq iloc1 iloc2) (Cst.cst_and cst1 cst2)) cst
+            Cst.cst_or (Cst.cst_and (Cst.cst_eq iloc1 iloc2) (Cst.cst_and cst1 cst2)) cst
           in
           Val.fold iter_iloc2 iloc2_v cst
         in
@@ -119,6 +119,7 @@ let inst_value v ienv =
 
 (* compose caller and callee heaps at call instructions. *)
 let comp_heap base caller callee ienv = 
+  let () = L.progress "IENV: %a\n@." InstEnv.pp ienv in
   let f = fun (loc: Loc.t) v base -> 
     match loc with
     | Explicit _ ->
@@ -130,9 +131,11 @@ let comp_heap base caller callee ienv =
         let update_val = fun (loc', cst) base -> 
           (* TODO: need to strong update! because caller's value remain after instantiation! *)
           let pre_v = Heap.find loc' caller in
+          (* Strange point! this cst is callee's one *)
           let merged_v = Helper.((ival ^ cst) 
             + (pre_v ^ (Cst.cst_not cst))) in
           let merged_v' = Val.optimize merged_v in
+          let () = L.progress "Loc: %a\nCST: %a\nIVAL: %a\n PRE: %a\n Merged: %a\n@." Loc.pp loc' Cst.pp cst Val.pp ival Val.pp pre_v Val.pp merged_v' in
           if (Val.is_empty merged_v') then
             base
           else

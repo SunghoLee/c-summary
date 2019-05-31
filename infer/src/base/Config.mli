@@ -593,6 +593,8 @@ val semantic_summary_pre : bool
 
 val semantic_summary : bool
 
+val pointer_preanalysis : bool
+
 val results_dir : string
 
 val seconds_per_iteration : float option
