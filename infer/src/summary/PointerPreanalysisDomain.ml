@@ -104,7 +104,7 @@ module Loc = struct
 end
 
 (* Choose Context for Pointer analysis *)
-module Ctxt = CSContext
+module Ctxt = CSContext 
 
 module PointerKey = struct
   type t = { holder: LocHolder.t; mutable ctxt: Ctxt.t list }
@@ -148,6 +148,8 @@ module UnionFind = struct
 
       let is_nil = function Nil -> true | _ -> false
 
+      let is_root = function N n -> is_nil n.parent | _ -> false
+
       let get_parent = function N n -> n.parent | _ -> failwith "Nil"
 
       let set_parent p = function N n -> n.parent <- p | _ -> failwith "Nil"
@@ -170,14 +172,21 @@ module UnionFind = struct
   end
 
   let rec find n =
-    let p = Tree.Node.get_parent n in 
-    if Tree.Node.is_nil p then n (* n is root *)
+    let open Tree.Node in
+    if is_root n then n
     else 
-      let p' = find p in
-      (Tree.Node.set_parent p' n; p')
+      let p' = find (get_parent n) in
+      (set_parent p' n; p')
 
   let union n1 n2 =
-    Tree.Node.set_parent (find n2) (find n1)
+    let open Tree.Node in
+    let root1 = find n1 in
+    let root2 = find n2 in
+    if root1 <> root2 then (
+      if not (is_root root1) || not (is_root root2) then
+        failwith "root must be nil!"
+      else
+        Tree.Node.set_parent root1 root2)
 end
 
 module Pk2NodeMap = struct

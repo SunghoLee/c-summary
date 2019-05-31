@@ -48,8 +48,13 @@ module AliasReporter = struct
     let aliases = load_aliases () in
     let aliases' = ProcResMap.add proc_name res in
     let oc = Pervasives.open_out alias_dat in
-    Marshal.to_channel oc aliases' [];
+    Marshal.to_channel oc aliases' [Marshal.Closures];
+    (*try
     Pervasives.close_out oc
+    with _ ->
+      let () = L.progress "====\n%a\n====" (ProcResMap.pp ~pp_value: Domain.pp) aliases' in
+      let () = Pervasives.close_out oc in
+      failwith "funtional value?"*)
 end
 
 module AnalysisTargets = struct
