@@ -6,6 +6,35 @@ module Helper = HelperFunction
 open SUtils
 open SemanticSummaryDomain
 
+module AliasEnv = struct
+  module PkSet = PrettyPrintable.MakePPSet(PointerPreanalysisDomain.PointerKey)
+
+  let find_all_root loc amap = 
+    let open PointerPreanalysis.AliasReporter in
+    let open PointerPreanalysisDomain in
+    let f_pkmap pk n set = 
+      let pk_loc = PointerKey.get_holder pk |> LocHolder.get_loc in
+      if pk_loc = loc then PkSet.add (UnionFind.Tree.Node.get_pk (UnionFind.find n)) set
+      else set
+    in
+    let f_pres proc pkmap set = (L.progress "S: %s\n@." (Typ.Procname.to_string proc);set) (*Pk2NodeMap.fold f_pkmap pkmap set*) in
+    ProcResMap.fold f_pres amap PkSet.empty
+
+  let is_alias alias_map l1 l2 = 
+    let open PointerPreanalysis.AliasReporter in
+    let open PointerPreanalysisDomain in
+    let alias_results = alias_map in 
+    let () = L.progress "Start? \n@." in
+    (*let min = ProcResMap.min_binding alias_results in*)
+    let () = L.progress "Alias calculation...\n@." in
+    let () = L.progress "Size: %d\n@." (ProcResMap.cardinal alias_results) in
+    let l1_root = find_all_root l1 alias_results in
+    let l2_root = find_all_root l2 alias_results in
+    let inter = PkSet.inter l1_root l2_root in
+    if PkSet.is_empty inter then false
+    else true
+end
+
 module TypMap = struct
   module M = PrettyPrintable.MakePPMap(
     struct 
@@ -116,11 +145,13 @@ let mk_tmap loc_typs tenv tmap =
   Caml.List.fold_right (f TypSet.empty) loc_typs tmap
 
 let init_heap ~this ~do_array loc_typs tenv heap tmap = (* loc_types: local list *)
+  let alias_map = PointerPreanalysis.AliasReporter.load_aliases () in
   let module TypSet = PrettyPrintable.MakePPSet(struct include Typ let pp = pp_full Pp.text end) in
   let is_gt l1 l2 = (Loc.compare l1 l2) = 1 in
   let pos_aliases addr typ tmap =
     TypMap.find typ tmap ~default:LocSet.empty
     |> LocSet.filter (fun x -> is_gt addr x && (Loc.is_pointer x || Loc.is_offset x))
+    |> LocSet.filter (AliasEnv.is_alias alias_map addr)
   in
   let handle_alias base_cst addr pos_a = (
     if not this then
@@ -186,7 +217,9 @@ let init_heap ~this ~do_array loc_typs tenv heap tmap = (* loc_types: local list
       | _ -> 
           heap
   in
-  Caml.List.fold_left (iter_loc TypSet.empty Cst.cst_true) heap loc_typs
+  let res = Caml.List.fold_left (iter_loc TypSet.empty Cst.cst_true) heap loc_typs in
+  let () = L.progress "INIT: %a\n@." Heap.pp res in
+  res
 
 let init tenv pdesc =
   let scope = VVar.mk_scope (Typ.Procname.to_string (Procdesc.get_proc_name pdesc)) in

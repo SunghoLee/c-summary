@@ -20,8 +20,37 @@ module LocHolder = struct
 
   let mk_holder (l: SemanticSummaryDomain.Loc.t) = Holder l
 
+  let is_addr_holder = function AddrHolder _ -> true | _ -> false
+
+  let get_loc = function
+    | Holder loc -> loc
+    | AddrHolder loc -> loc
+    | _ -> failwith "cannot get a location from none" 
+
+  let get_offset = function
+    | Holder loc -> (
+      match loc with
+      | Offset (base, offset) -> offset
+      | _ -> failwith "It is not a offset location.")
+    | _ ->
+        failwith "It is not a location holder."
+
   let is_primitive = function
     | Holder loc -> (SemanticSummaryDomain.Loc.mk_implicit "primitive") = loc
+    | _ -> false
+
+  let is_offset = function
+    | Holder loc -> (
+      match loc with
+      | Offset _ -> true 
+      | _ -> false)
+    | _ -> false
+
+  let is_pointer = function
+    | Holder loc -> (
+      match loc with
+      | Pointer _ -> true 
+      | _ -> false)
     | _ -> false
 
   let pp fmt = function
@@ -120,6 +149,32 @@ module PointerKey = struct
 
   let is_primitive { holder } = LocHolder.is_primitive holder
 
+  let get_holder { holder } = holder
+
+  let get_ctxt { ctxt } = ctxt
+
+  let is_offset { holder } = LocHolder.is_offset holder
+
+  let is_pointer { holder } = LocHolder.is_pointer holder
+
+  let is_complex o = is_offset o || is_pointer o
+
+  (* Preserve the context *)
+  let get_base_pk { holder; ctxt } =
+    if LocHolder.is_addr_holder holder then
+      failwith "It is a location holder."
+    else
+      let (loc: SemanticSummaryDomain.Loc.t) = LocHolder.get_loc holder in
+      match loc with
+      | LocTop | Explicit _ | Implicit _ | Const _ | FunPointer _ | Ret _ ->
+          failwith (F.asprintf "Cannot get the base pointer key of %a." SemanticSummaryDomain.Loc.pp loc)
+      | Pointer (base, _, _) -> 
+          mk_pk_w_ctxt ctxt base
+      | Offset (base, _) ->
+          mk_pk_w_ctxt ctxt base
+
+  let get_base_pk_opt pk = try Some (get_base_pk pk) with _ -> None
+
   let pp_ctxt fmt ctxt_list = 
     let rec impl fmt = function
       | [] -> F.fprintf fmt "]"
@@ -129,6 +184,8 @@ module PointerKey = struct
     F.fprintf fmt "[ %a" impl ctxt_list
 
   let pp fmt { holder;  ctxt } = F.fprintf fmt "%a : %a" LocHolder.pp holder pp_ctxt ctxt
+
+  let to_string pk = F.asprintf "%a" pp pk
 
   let copy { holder; ctxt } = { holder; ctxt }
 
@@ -269,4 +326,89 @@ let eq (lhs: PointerKey.t) (rhs: PointerKey.t) m =
     let () = if p_lhs <> p_rhs then UnionFind.union n_lhs n_rhs in m''
 
 let empty = Pk2NodeMap.empty
+
+let is_implicit_root node =
+  let open UnionFind.Tree.Node in
+  let (loc: SemanticSummaryDomain.Loc.t) = get_pk node |> PointerKey.get_holder |> LocHolder.get_loc in
+  match loc with
+  | Implicit s -> String.is_prefix s ~prefix:"ROOT_"
+  | _ -> false
+
+  (*
+let root_conversion m =
+  let open UnionFind.Tree.Node in
+  let convert pk node m =
+    let m' = Pk2NodeMap.add pk node m in
+    if is_root node && not (is_implicit_root node) then
+      let new_root_pk = PointerKey.mk_pk_w_ctxt [] (SemanticSummaryDomain.Loc.mk_implicit ("ROOT_" ^ (PointerKey.to_string pk))) in
+      let new_root_node = mk_node new_root_pk in
+      (set_parent new_root_node node; Pk2NodeMap.add new_root_pk new_root_node m')
+    else m'
+  in
+  Pk2NodeMap.fold convert m Pk2NodeMap.empty
+  *)
+
+let root_lift m = 
+  let open SemanticSummaryDomain in
+  let rec impl m = 
+    let updated = ref false in
+    let add_base pk cur_m = (
+      match Pk2NodeMap.find_opt pk m with
+      | Some n -> (n, cur_m)
+      | None -> (
+        match Pk2NodeMap.find_opt pk cur_m with
+        | Some n -> (n, cur_m)
+        | None -> (updated := true; mk_node pk cur_m)))
+    in
+    let rec lift pk n acc = 
+      let m'' = Pk2NodeMap.add pk n acc in
+      if PointerKey.is_pointer pk then
+        let base = PointerKey.get_base_pk pk in
+        let base_n, acc' = add_base base acc in
+        let acc'' = lift base base_n acc' in
+        let base_loc = UnionFind.find base_n |> UnionFind.Tree.Node.get_pk |> PointerKey.get_holder |> LocHolder.get_loc in
+        let ctxt = PointerKey.get_ctxt base in
+        let ptr_base_loc = Loc.mk_var_pointer base_loc in
+        let ptr_base_pk = PointerKey.mk_pk_w_ctxt ctxt ptr_base_loc in 
+        let ptr_base_n, acc''' = add_base ptr_base_pk acc'' in
+        let ptr_base_root = UnionFind.find ptr_base_n in
+        let n_root = UnionFind.find n in
+        (if ptr_base_root <> n_root then
+          begin
+            updated := true;
+            UnionFind.union n ptr_base_n;
+            acc'''
+          end
+        else
+          acc''')
+      else if PointerKey.is_offset pk then
+        let base = PointerKey.get_base_pk pk in
+        let base_n, acc' = add_base base acc in
+        let acc'' = lift base base_n acc' in
+        let base_loc = UnionFind.find base_n |> UnionFind.Tree.Node.get_pk |> PointerKey.get_holder |> LocHolder.get_loc in
+        let ctxt = PointerKey.get_ctxt base in
+        let offset = PointerKey.get_holder pk |> LocHolder.get_offset in
+        let off_base_loc = Loc.mk_offset base_loc offset in
+        let off_base_pk = PointerKey.mk_pk_w_ctxt ctxt off_base_loc in 
+        let off_base_n, acc''' = add_base off_base_pk acc'' in
+        let off_base_root = UnionFind.find off_base_n in
+        let n_root = UnionFind.find n in
+        (if off_base_root <> n_root then
+          begin
+            updated := true;
+            UnionFind.union n off_base_n;
+            acc'''
+          end
+        else
+          acc''')
+      else
+        m''
+    in
+    let new_m = Pk2NodeMap.fold lift m Pk2NodeMap.empty in
+    (if !updated then
+      impl new_m
+    else
+      new_m)
+  in
+  impl m
 

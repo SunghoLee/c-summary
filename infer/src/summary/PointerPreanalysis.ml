@@ -46,9 +46,10 @@ module AliasReporter = struct
     
   let store_aliases proc_name res = 
     let aliases = load_aliases () in
-    let aliases' = ProcResMap.add proc_name res in
+    let aliases' = ProcResMap.add proc_name res aliases in
     let oc = Pervasives.open_out alias_dat in
-    Marshal.to_channel oc aliases' [Marshal.Closures];
+    let () = Marshal.to_channel oc aliases' [] in
+    Pervasives.close_out oc 
     (*try
     Pervasives.close_out oc
     with _ ->
@@ -118,7 +119,7 @@ module TransferFunctions = struct
 
   let rec get_proc_summary ?caller do_clear callee_name = 
     Ondemand.clear_cache ();
-    let () = L.progress "Request summary of %s\n@." (Typ.Procname.to_string callee_name) in
+    (*let () = L.progress "Request summary of %s\n@." (Typ.Procname.to_string callee_name) in*)
     let () = AnalysisTargets.add_target callee_name in
     let sum = 
       match caller with
@@ -220,7 +221,7 @@ module TransferFunctions = struct
 
   let exec_instr : Domain.t -> extras ProcData.t -> CFG.Node.t -> Sil.instr -> Domain.t = 
     fun m {pdesc; tenv; extras} node instr ->
-      let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in
+      (*let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in*)
       let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
       let scope = Domain.VVar.mk_scope proc_name in
       match instr with
@@ -246,7 +247,7 @@ module TransferFunctions = struct
           else
             let lhs_addr = exec_expr scope e1 |> PKFactory.mk_pk in
             let rhs_addr = exec_expr scope e2 |> PKFactory.mk_lpk in
-            let () = L.progress "#RHS: %a\n@." PKFactory.pp rhs_addr in
+            (*let () = L.progress "#RHS: %a\n@." PKFactory.pp rhs_addr in*)
             Domain.eq lhs_addr rhs_addr m
             
       | Prune (e, loc, b, i) -> (* do not support heap pruning *)
@@ -289,11 +290,11 @@ module TransferFunctions = struct
                   let ret_param_addr = Domain.VVar.of_string "__return_param" ~proc:scope |> Domain.Loc.mk_explicit |> PKFactory.mk_pk in
                   Domain.eq lhs_addr ret_addr m'' |> Domain.eq lhs_addr ret_param_addr
               | None -> 
-                  let () = L.progress "Not existing callee. Just ignore this call.\n@." in
+                  (*let () = L.progress "Not existing callee. Just ignore this call.\n@." in*)
                   m
                   )
           | None -> 
-              let () = L.progress "Not existing callee (empty declaration). Just ignore this call.\n@." in
+              (*let () = L.progress "Not existing callee (empty declaration). Just ignore this call.\n@." in*)
               m)
 
       | Call _ | Nullify _ | Abstract _ | ExitScope _ ->
@@ -310,13 +311,13 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
     let proc_name = Procdesc.get_proc_name proc_desc in
     let proc_data = ProcData.make_default proc_desc tenv in 
     if AnalysisTargets.is_targeted proc_name then (
-    let () = L.progress "Analyzing a function %s\n@." (Typ.Procname.to_string proc_name) in
-    let () = L.progress "ATTRIBUTE:\n%a\n@." ProcAttributes.pp (Procdesc.get_attributes proc_desc) in
+    (*let () = L.progress "Analyzing a function %s\n@." (Typ.Procname.to_string proc_name) in*)
+    (*let () = L.progress "ATTRIBUTE:\n%a\n@." ProcAttributes.pp (Procdesc.get_attributes proc_desc) in*)
     match Analyzer.compute_post proc_data ~initial:PointerPreanalysisDomain.empty with
     | Some p -> 
         (*if not (JniModel.is_jni proc_name) && JniModel.is_callable_from_java proc_name then
         (* TODO: record the result *)*)
-        let () = L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) Domain.pp p in
+        (*let () = L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) Domain.pp (Domain.root_lift p) in*)
         let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
         (if JniModel.is_callable_from_java proc_name then
           AliasReporter.store_aliases proc_name p);

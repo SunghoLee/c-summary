@@ -135,7 +135,7 @@ let comp_heap base caller callee ienv =
           let merged_v = Helper.((ival ^ cst) 
             + (pre_v ^ (Cst.cst_not cst))) in
           let merged_v' = Val.optimize merged_v in
-          let () = L.progress "Loc: %a\nCST: %a\nIVAL: %a\n PRE: %a\n Merged: %a\n@." Loc.pp loc' Cst.pp cst Val.pp ival Val.pp pre_v Val.pp merged_v' in
+          (*let () = L.progress "Loc: %a\nCST: %a\nIVAL: %a\n PRE: %a\n Merged: %a\n@." Loc.pp loc' Cst.pp cst Val.pp ival Val.pp pre_v Val.pp merged_v' in*)
           if (Val.is_empty merged_v') then
             base
           else

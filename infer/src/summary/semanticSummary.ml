@@ -7,7 +7,7 @@ open SemanticSummaryDomain
 open SUtils
 
 module AnalysisTargets = struct
-  module Targets = PrettyPrintable.MakePPMap(Typ.Procname) 
+  module Targets = PrettyPrintable.MakePPSet(Typ.Procname) 
 
   let targets_dat = "targets.dat"
 
