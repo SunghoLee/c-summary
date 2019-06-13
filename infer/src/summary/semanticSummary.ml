@@ -392,17 +392,14 @@ module TransferFunctions = struct
           let heap' =Caml.List.fold_left (fun heap id ->
             (match Var.get_ident id with
             | Some ident -> 
-                let () = L.progress "%a " Ident.pp ident in
                 Heap.remove (Loc.of_id ident) heap
             | None ->
                 (match Var.get_pvar id with
                 | Some pvar ->
-                    let () = L.progress " %a" (Pvar.pp Pp.text) pvar in
                     Heap.remove (Loc.of_pvar pvar) heap
                 | None ->
                     heap))) heap id_list
           in
-          let () = L.progress "\n@." in
           mk_domain heap' logs
     
 

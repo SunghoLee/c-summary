@@ -177,15 +177,16 @@ module TransferFunctions = struct
                   else
                     update visited' (Domain.Loc.mk_offset param (Domain.Loc.mk_const_of_string field)) (Domain.Loc.mk_var_pointer (Domain.Loc.mk_offset arg (Domain.Loc.mk_const_of_string field))) typ  m)
                 m'
-        | Tint _ | Tfloat _ | Tfun _ | TVar _ | Tarray _ -> 
+        | Tint _ | Tfloat _ | Tfun _ | TVar _ | Tarray _ | Tvoid -> 
             m
+        | _ -> failwith (F.asprintf "Match failure: %a" (Typ.pp_full Pp.text) typ)
     in
     Caml.List.fold_left2 (fun m (p, typ) a -> update TypSet.empty p a typ m) m params args
 
-  let rec partial_list lst n =
+  let partial_list lst n =
     let rec impl lst i =
       if i > n then []
-      else (Caml.List.hd lst) :: (partial_list (Caml.List.tl lst) (i + 1))
+      else (Caml.List.hd lst) :: (impl (Caml.List.tl lst) (i + 1))
     in
     impl lst 1
 
@@ -300,7 +301,7 @@ module TransferFunctions = struct
       | Call _ | Nullify _ | Abstract _ | ExitScope _ ->
           m    
       | _ -> 
-          failwith "INSTINST!!!"
+          failwith (F.asprintf "check on this instruction semantics: %a" PpSumm.pp_inst (node, instr))
 
   let pp_session_name _node fmt = F.pp_print_string fmt "Steensgaard style pointer analysis for C/C++" 
 end
