@@ -25,3 +25,11 @@ cd $C_SUMMARY_DIR
 echo "Run tests in $INFER_CWD"
 LD_LIBRARY_PATH=/home/eshaj/.opam/ocaml-variants.4.07.1+flambda/lib/z3 dune runtest --force
 popd
+
+# Gen Java
+# pushd .
+# cd $C_SUMMARY_DIR
+# echo "Run tests in $INFER_CWD"
+# LD_LIBRARY_PATH=/home/eshaj/.opam/ocaml-variants.4.07.1+flambda/lib/z3 dune build JavaGenerator.exe
+# LD_LIBRARY_PATH=/home/eshaj/.opam/ocaml-variants.4.07.1+flambda/lib/z3 $C_SUMMAR_DIR/infer/src/_build/default/JavaGenerator.exe
+# popd
