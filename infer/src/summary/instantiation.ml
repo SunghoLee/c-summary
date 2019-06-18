@@ -119,7 +119,6 @@ let inst_value v ienv =
 
 (* compose caller and callee heaps at call instructions. *)
 let comp_heap base caller callee ienv = 
-  let () = L.progress "IENV: %a\n@." InstEnv.pp ienv in
   let f = fun (loc: Loc.t) v base -> 
     match loc with
     | Explicit _ ->
