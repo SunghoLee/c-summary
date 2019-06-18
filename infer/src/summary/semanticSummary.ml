@@ -26,14 +26,16 @@ module AnalysisTargets = struct
     Marshal.to_channel oc targets' [];
     Pervasives.close_out oc
 
-  let is_targeted proc_name = 
+  let is_targeted proc_name = true
+  (*
     if JniModel.is_jni proc_name then
       false
     else if JniModel.is_callable_from_java proc_name then
       true
     else 
       let res = load_targets () in
-      Targets.mem proc_name res 
+      Targets.mem proc_name res
+      *)
 
   let add_target proc_name = 
     store_target proc_name 
@@ -90,6 +92,7 @@ module TransferFunctions = struct
   let opt_heap_every_stmt = false
 
   let mk_domain heap logs = 
+    (*let () = L.progress "ResHeap: %a\n@." Heap.pp heap in*)
     if opt_heap_every_stmt then
       Domain.make (Heap.opt_cst_in_heap heap) logs
     else
@@ -169,7 +172,12 @@ module TransferFunctions = struct
           (fun (obj_addr, obj_addr_cst) v -> Helper.(((Heap.find obj_addr heap) ^ obj_addr_cst) + v))
           obj_addr_v Val.empty
         in
-        Val.map (fun (obj_loc, obj_cst) -> Loc.mk_offset obj_loc field, obj_cst) obj_v
+        Val.fold (fun (obj_loc, obj_cst) vals -> 
+          if not (Loc.is_const obj_loc) then
+            Val.add (Loc.mk_offset obj_loc field, obj_cst) vals
+          else vals)
+        obj_v Val.empty
+        (*Val.map (fun (obj_loc, obj_cst) -> Loc.mk_offset obj_loc field, obj_cst) obj_v*)
     | Lindex (e1, e2) -> (* &(e1[e2]) *)
         let index_v = exec_expr scope location heap e2 in (* value of e2 *)
         let arr_v = exec_expr scope location heap e1 in (* address of e1 *)
@@ -248,28 +256,46 @@ module TransferFunctions = struct
           | None ->
               let () = L.progress "Does not exist initializer: %a\n@."  Loc.pp lhs_addr in
               mk_domain heap logs)
+
       | Load (id, e1, typ, loc) -> 
           let lhs_addr = Loc.of_id id ~proc:scope in
           let rhs_v = exec_expr scope loc heap e1 |> (fun x -> Helper.load x heap) in
           let heap' = Heap.add lhs_addr rhs_v heap in
           mk_domain heap' logs
+
       | Store (Lvar pvar, typ, e2, loc) when Pvar.is_return pvar -> (* for return statements *)
           let rhs_v = exec_expr scope loc heap e2 in
           let mname = Typ.Procname.to_string (Procdesc.get_proc_name pdesc) in
           let ret_addr = Loc.mk_ret mname in
           let heap' = Heap.weak_update ret_addr rhs_v heap in
           mk_domain heap' logs
+
       | Store (e1 , typ, e2, loc) -> 
           let lhs_v = exec_expr scope loc heap e1 in
           let rhs_v = exec_expr scope loc heap e2 in
           let heap' = Helper.store lhs_v rhs_v heap in
-          mk_domain heap' logs
+          let res = mk_domain heap' logs in
+          res
+            
       | Prune (e, loc, b, i) -> (* do not support heap pruning *)
           mk_domain heap logs
+
+      | Call ((id, ret_typ), (Const (Cfun callee_pname)), [(e, typ)], loc, flag) when (Typ.Procname.to_string callee_pname) = "__new" -> ((* for dynamic allocations *)
+          try
+            let data_typ = Exp.texp_to_typ None e in
+            let lhs_addr = Loc.of_id id ~proc:scope in
+            let ptr = Loc.mk_concrete_pointer ~dyn:true lhs_addr in
+            let ptr' = Loc.mk_concrete_pointer ~dyn:true ptr in
+            let heap' = Heap.add lhs_addr (Val.singleton (ptr, Cst.cst_true)) heap in
+            let heap'' = Heap.add ptr (Val.singleton (ptr', Cst.cst_true)) heap' in
+            mk_domain heap'' logs
+          with _ ->
+            mk_domain heap logs)
+
       | Call ((id, ret_typ), (Const (Cfun callee_pname)), args, loc, flag) when JniModel.is_jni callee_pname -> (* for jni function calls *)
           let lhs_addr = Loc.of_id id ~proc:scope in
           let ret_addr = Loc.mk_implicit ((Location.to_string loc) ^ ":ret") in
-          let ret_addr_ptr = Loc.mk_pointer ret_addr in
+          let ret_addr_ptr = Loc.mk_concrete_pointer ret_addr in
           let heap' = Heap.add lhs_addr (Val.singleton (ret_addr, Cst.cst_true)) heap
             |> Heap.add ret_addr (Val.singleton (ret_addr_ptr, Cst.cst_true)) 
           in
@@ -288,6 +314,7 @@ module TransferFunctions = struct
           let log = LogUnit.mk [cs] ret_addr jnifun arg_addrs dumped_heap in
           let logs' = CallLogs.add log logs in  
           mk_domain heap' logs'
+
       | Call ((id, ret_typ), (Const (Cfun callee_pname)), args, loc, flag) -> 
           let lhs_addr = Loc.of_id ~proc:scope id in
           (match Ondemand.get_proc_desc callee_pname with 
@@ -316,6 +343,8 @@ module TransferFunctions = struct
                     args_v
                 in
                 let ienv = Instantiation.mk_ienv tenv scope (fun_params callee_desc) args_v' end_heap heap'' in
+                let () = L.progress "# Start composition.\n@." in
+                let start_gettimeofday = Unix.gettimeofday () in
                 let heap''' = Instantiation.comp_heap heap'' heap'' end_heap ienv in
                 (*let () = print_to_file heap'' end_heap heap''' ienv in
                 let () = Caml.List.iter (fun arg_v -> L.progress "ARG: %a\n@." Val.pp arg_v) args_v' in 
@@ -323,6 +352,8 @@ module TransferFunctions = struct
                 let _ = read_line () in*)
                 let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
                 let logs' = Instantiation.comp_log cs logs end_logs heap''' ienv in
+                let end_gettimeofday = Unix.gettimeofday () in
+                let () = L.progress "\tDone: %f\n@." (end_gettimeofday -. start_gettimeofday) in
                 let ret_addr = Loc.mk_ret_of_pname callee_pname in
                 let heap'''' = 
                   (match Heap.find_opt ret_addr heap''' with
@@ -344,16 +375,21 @@ module TransferFunctions = struct
           | None -> 
               let () = L.progress "Not existing callee (empty declaration). Just ignore this call.\n@." in
               mk_domain heap logs)
+
       | Call ((id, ret_typ), e, args, loc, flag) -> 
           let () = L.progress "FUN_EXPR: %a\n@." Val.pp (exec_expr scope loc heap e) in
           mk_domain heap logs
+
       | Call _ ->
           let () = L.progress "Not support function pointers\n@." in
           mk_domain heap logs
+
       | Nullify (pid, loc) -> 
           mk_domain heap logs
+
       | Abstract loc -> 
           mk_domain heap logs
+
       | ExitScope (id_list, loc) -> 
           let heap' =Caml.List.fold_left (fun heap id ->
             (match Var.get_ident id with

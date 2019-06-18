@@ -37,11 +37,13 @@ let rec fp_mk_ienv caller_scope callee_heap caller_heap ienv =
               let v = Val.singleton (Loc.mk_offset b i, Cst.cst_and b_cst i_cst) in
               cache := Cache.add loc v !cache;
               InstEnv.add loc v ienv) ienv'
-      | Pointer base ->
+      | Pointer (base, LocVar, _) ->
           let ienv' = expand (base, Cst.cst_true) ienv in
           let ins_base = InstEnv.find base ienv' in
           Val.fold 
             (fun (b, cst) ienv ->
+              InstEnv.add loc (Heap.find b caller_heap) ienv)
+              (*
               (match Heap.find_opt b caller_heap with
               | Some v ->
                   let v' = Helper.(v ^ cst) in
@@ -53,7 +55,7 @@ let rec fp_mk_ienv caller_scope callee_heap caller_heap ienv =
                     let v = (Val.singleton (ptr, cst)) in
                     cache := Cache.add loc v !cache;
                     InstEnv.add loc v ienv
-                  else ienv))
+                  else ienv))*)
             ins_base ienv'
       | _ -> 
           ienv
@@ -99,7 +101,7 @@ let rec inst_cst : Cst.t -> InstEnv.t -> Cst.t =
         let iloc2_v = InstEnv.find loc2 ienv in
         let iter_iloc1 = fun (iloc1, cst1) cst ->
           let iter_iloc2 = fun (iloc2, cst2) cst ->
-            Cst.cst_and (Cst.cst_and (Cst.cst_eq iloc1 iloc2) (Cst.cst_and cst1 cst2)) cst
+            Cst.cst_or (Cst.cst_and (Cst.cst_eq iloc1 iloc2) (Cst.cst_and cst1 cst2)) cst
           in
           Val.fold iter_iloc2 iloc2_v cst
         in
@@ -126,20 +128,25 @@ let comp_heap base caller callee ienv =
     | _ ->
         let ival = inst_value v ienv in
         let update_val = fun (loc', cst) base -> 
+          (* TODO: need to strong update! because caller's value remain after instantiation! *)
           let pre_v = Heap.find loc' caller in
+          (* Strange point! this cst is callee's one *)
           let merged_v = Helper.((ival ^ cst) 
             + (pre_v ^ (Cst.cst_not cst))) in
           let merged_v' = Val.optimize merged_v in
+          (*let () = L.progress "Loc: %a\nCST: %a\nIVAL: %a\n PRE: %a\n Merged: %a\n@." Loc.pp loc' Cst.pp cst Val.pp ival Val.pp pre_v Val.pp merged_v' in*)
           if (Val.is_empty merged_v') then
             base
           else
-            Heap.weak_update loc' merged_v' base
+            Heap.add loc' merged_v' base
         in
         let iloc_v = InstEnv.find loc ienv in
         Val.fold update_val iloc_v base
   in
-  let new_heap = Heap.fold f callee Heap.empty in
-  Heap.fold Heap.add new_heap base
+  Heap.fold f callee base
+  (*
+  let new_heap = Heap.fold f callee base in
+  Heap.fold Heap.add new_heap base*)
 
 (* compose caller and callee logs at call instructions. *)
 let comp_log call_site base callee_logs caller_heap ienv = 

@@ -98,11 +98,17 @@ module VVar = struct
 end
 
 module Loc = struct
-  type t = 
+  type ptr_typ = 
+  | ConcreteLoc
+  | LocVar
+  [@@deriving compare] 
+  
+  and t = 
+  | LocTop 
   | Explicit of VVar.t
   | Implicit of string
   | Const of const_type
-  | Pointer of t
+  | Pointer of t * ptr_typ * bool (* bool is for weak update *)
   | FunPointer of Typ.Procname.t
   | Offset of t * t
   | Ret of string
@@ -112,6 +118,41 @@ module Loc = struct
   | Z of Z.t
   | String of string
   [@@deriving compare]
+
+  let rec pp fmt = function
+    | LocTop -> F.fprintf fmt "LOCTOP"
+    | Explicit i -> F.fprintf fmt "EX#%a(%a)" VVar.pp i VVar.pp_var_scope i
+    | Implicit i -> F.fprintf fmt "IM#%s" i
+    | Const i -> F.fprintf fmt "CONST#%a" pp_const i
+    | Pointer (p, typ, _) -> F.fprintf fmt "*(%a)" pp p
+    | FunPointer p -> F.fprintf fmt "FN#%s" (Typ.Procname.to_string p)
+    | Offset (l, i) -> F.fprintf fmt "%a@%a" pp l pp i
+    | Ret s -> F.fprintf fmt "RET#%s" s
+  and pp_const fmt = function
+    | Z i -> F.fprintf fmt "%a" Z.pp_print i
+    | String s -> F.fprintf fmt "%s" s
+
+  let klimit = 10
+
+  let rec get_k = function
+  | LocTop -> 
+      100000
+  | Explicit _ ->
+      1
+  | Implicit _ ->
+      1
+  | Const _ ->
+      1
+  | Pointer (l, typ, _) ->
+      1 + (get_k l)
+  | FunPointer _ ->
+      1
+  | Offset (b, _) ->
+      1 + (get_k b)
+  | Ret _ ->
+      1
+
+  let is_top = function LocTop -> true | _ -> false
 
   let is_temporal = function Explicit v -> VVar.is_temporal v | _ -> false
 
@@ -139,7 +180,17 @@ module Loc = struct
 
   let mk_const_of_string s = Const (String s)
 
-  let mk_pointer i = Pointer i
+  let mk_pointer ?dyn typ i = 
+    match dyn with
+    | Some true ->
+        let () = L.progress "Make Dyn Loc: %a\n@." pp i in
+        Pointer (i, typ, true)
+    | _ ->
+        Pointer (i, typ, false)
+
+  let mk_concrete_pointer ?dyn = mk_pointer ?dyn ConcreteLoc
+
+  let mk_var_pointer ?dyn = mk_pointer ?dyn LocVar
 
   let mk_fun_pointer i = FunPointer i
 
@@ -149,9 +200,25 @@ module Loc = struct
 
   let mk_offset l i = Offset (l, i)
 
+  let rec is_concrete = function
+    | LocTop | Explicit _ | Implicit _ | Const _ | FunPointer _ | Ret _ ->
+        true
+    | Pointer (l, typ, _) -> 
+        typ = ConcreteLoc
+    | Offset (l, _) ->
+        is_concrete l
+
+  let rec is_dyn = function
+    | LocTop | Explicit _ | Implicit _ | Const _ | FunPointer _ | Ret _ ->
+        false
+    | Pointer (l, typ, b) -> 
+        b || is_dyn l    
+    | Offset (l, _) ->
+        is_dyn l
+
   let get_base = function Offset (l, i) -> l | _ -> failwith "it is not an offset."
 
-  let unwrap_ptr = function Pointer i -> i | _ -> failwith "it is not a pointer."
+  let unwrap_ptr = function Pointer (i, _, _) -> i | _ -> failwith "it is not a pointer."
 
   let of_id ?proc id = VVar.of_id ?proc id |> mk_explicit
 
@@ -159,13 +226,15 @@ module Loc = struct
 
   let rec is_in scope loc =
     match loc with
+    | LocTop ->
+        true
     | Explicit var ->
         VVar.is_in scope var 
     | Implicit _ ->
         true
     | Const _ ->
         true
-    | Pointer t ->
+    | Pointer (t, typ, _) ->
         is_in scope t
     | FunPointer _ ->
         true
@@ -185,14 +254,18 @@ module Loc = struct
 
   and ( <= ) lhs rhs =
     match lhs, rhs with
+    | _, LocTop ->
+        true
+    | LocTop, _ -> 
+        false
     | Explicit lhs_const, Explicit rhs_const ->
         (VVar.compare lhs_const rhs_const) = 0
     | Implicit lhs_str, Implicit rhs_str ->
         lhs_str = rhs_str
     | Const lhs_const, Const rhs_const ->
         leq_const lhs_const rhs_const
-    | Pointer lhs_ptr, Pointer rhs_ptr ->
-        lhs_ptr <= rhs_ptr
+    | Pointer (lhs_ptr, lhs_typ, _), Pointer (rhs_ptr, rhs_typ, _) ->
+        lhs_typ = rhs_typ && lhs_ptr <= rhs_ptr
     | FunPointer lhs_ptr, FunPointer rhs_ptr ->
         (Typ.Procname.compare lhs_ptr rhs_ptr) = 0
     | Offset (lhs_loc, lhs_index), Offset (rhs_loc, rhs_index) ->
@@ -202,17 +275,6 @@ module Loc = struct
     | _, _ ->
         false
 
-  let rec pp fmt = function
-    | Explicit i -> F.fprintf fmt "EX#%a(%a)" VVar.pp i VVar.pp_var_scope i
-    | Implicit i -> F.fprintf fmt "IM#%s" i
-    | Const i -> F.fprintf fmt "CONST#%a" pp_const i
-    | Pointer p -> F.fprintf fmt "*(%a)" pp p
-    | FunPointer p -> F.fprintf fmt "FN#%s" (Typ.Procname.to_string p)
-    | Offset (l, i) -> F.fprintf fmt "%a@%a" pp l pp i
-    | Ret s -> F.fprintf fmt "RET#%s" s
-  and pp_const fmt = function
-    | Z i -> F.fprintf fmt "%a" Z.pp_print i
-    | String s -> F.fprintf fmt "%s" s
 
   let to_string i = F.asprintf "%a" pp i
 end
@@ -314,11 +376,10 @@ module Cst = struct
     let new_sym : context -> Loc.t -> Expr.expr = 
       fun ctxt loc ->
         let sort = Arithmetic.Integer.mk_sort ctxt in
-        match loc with
-        | Explicit _ | Implicit _ | Const _ ->
-            (index := !index + 1; (Expr.mk_numeral_int ctxt (get_index loc) sort))
-        | _ ->
-            (index := !index + 1; (Expr.mk_const ctxt (Symbol.mk_int ctxt !index) sort))
+        if Loc.is_concrete loc then
+          (index := !index + 1; (Expr.mk_numeral_int ctxt (get_index loc) sort))
+        else 
+          (index := !index + 1; (Expr.mk_const ctxt (Symbol.mk_int ctxt !index) sort))
 
     let find ctx loc = 
       match Loc2SymMap.find_opt loc !sym_map with
@@ -564,10 +625,10 @@ module InstEnv = struct
       let total = (size ienv) in
       let () = L.progress "#IENV optimizing(%d)!\n@." total in
       let cur = ref 0 in
-      let pp = print_progress total in
+      let ppp = print_progress total in
       let res = fold 
       (fun loc v ienv ->
-        let v' = Val.optimize v ~mornitor:pp ~base_i:!cur in
+        let v' = Val.optimize v ~mornitor:ppp ~base_i:!cur in
         let () = cur := (Val.cardinal v) + !cur in
         if Val.is_empty v' then ienv else add loc v' ienv)
       ienv empty in
@@ -602,6 +663,21 @@ module Heap = struct
     |> (fun f -> Val.fold f v locset'))
   |> (fun f -> fold f heap LocSet.empty)
 
+  let weak_update loc v heap =
+    match find_opt loc heap with
+    | Some v' -> 
+        add loc (Val.union v' v) heap
+    | None ->
+        add loc v heap
+
+  let add l v heap =
+    if l = (Loc.mk_const_of_z Z.zero) then
+      heap
+    else if Loc.is_dyn l then
+      weak_update l v heap
+    else
+      add l v heap
+    
   let find_offsets_of l heap =
     LocSet.filter  
       (fun (loc: Loc.t) -> match loc with Offset (base, _) -> base = l | _ -> false)
@@ -612,11 +688,7 @@ module Heap = struct
     | Some v ->
         v
     | None ->
-        if not (Loc.is_const l) then
-          Val.singleton (Loc.mk_pointer l, Cst.cst_true)
-        else
-          Val.empty
-        (*Val.empty*)
+        Val.empty
 
   let ( <= ) lhs rhs =
     let f = fun key val1 ->
@@ -627,13 +699,6 @@ module Heap = struct
           false
     in
     for_all f lhs
-
-  let weak_update loc v heap =
-    match find_opt loc heap with
-    | Some v' -> 
-        add loc (Val.union v' v) heap
-    | None ->
-        add loc v heap
 
   let disjoint_union heap1 heap2 =
     union (fun _ _ _ -> failwith "Heaps are not disjoint!") heap1 heap2
@@ -691,7 +756,7 @@ module Heap = struct
     let make heap = 
       let rec cedge (loc: Loc.t) g =
         match loc with
-        | Pointer base ->
+        | Pointer (base, typ, _) ->
             let tov = get_vertex loc g in
             let fromv = get_vertex base g in
             add_edge fromv tov; cedge base g
@@ -787,13 +852,14 @@ module Heap = struct
 
   let join lhs rhs = 
     (* TODO: need to revise this for performance *)
-    let () = L.progress "#Start Heap Optimization.\n@." in
+    let () = L.progress "#Start Heap Optimization in Join!!.\n@." in
     let lhs' = opt_cst_in_heap lhs in
     let rhs' = opt_cst_in_heap rhs in
-    let () = L.progress "\n\tDone.\n@." in
     union (fun key val1 val2 -> Some (Val.join val1 val2)) lhs' rhs'
 
   let widen ~prev ~next =
+    join prev next
+    (*
     (fun loc prev_v_opt next_v_opt ->
       match prev_v_opt, next_v_opt with
       | None, _ | _, None ->
@@ -801,6 +867,7 @@ module Heap = struct
       | Some prev_v, Some next_v ->
           Some (Val.widen ~prev:prev_v ~next:next_v))
     |> (fun f -> merge f prev next)
+    *)
 
 end
 

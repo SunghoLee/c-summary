@@ -6,6 +6,33 @@ module Helper = HelperFunction
 open SUtils
 open SemanticSummaryDomain
 
+module AliasEnv = struct
+  module PkSet = PrettyPrintable.MakePPSet(PointerPreanalysisDomain.PointerKey)
+
+  let alias_map = PointerPreanalysis.AliasReporter.load_aliases ()
+
+  let find_all_root loc amap = 
+    let open PointerPreanalysis.AliasReporter in
+    let open PointerPreanalysisDomain in
+    let f_pkmap pk n set = 
+      let pk_loc = PointerKey.get_holder pk |> LocHolder.get_loc in
+      if pk_loc = loc then PkSet.add (UnionFind.Tree.Node.get_pk (UnionFind.find n)) set
+      else set
+    in
+    let f_pres proc pkmap set = Pk2NodeMap.fold f_pkmap pkmap set in
+    ProcResMap.fold f_pres amap PkSet.empty
+
+  let is_alias l1 l2 = 
+    let open PointerPreanalysis.AliasReporter in
+    let open PointerPreanalysisDomain in
+    let alias_results = alias_map in 
+    let l1_root = find_all_root l1 alias_results in
+    let l2_root = find_all_root l2 alias_results in
+    let inter = PkSet.inter l1_root l2_root in
+    if PkSet.is_empty inter then false
+    else true
+end
+
 module TypMap = struct
   module M = PrettyPrintable.MakePPMap(
     struct 
@@ -85,7 +112,7 @@ let mk_tmap loc_typs tenv tmap =
       let visited' = TypSet.add typ visited in
       match typ.Typ.desc with
       | Tptr (typ', kind) ->
-          f visited' ((Loc.mk_pointer loc), typ') tmap'
+          f visited' ((Loc.mk_var_pointer loc), typ') tmap'
       | Tstruct name ->
           Helper.get_fld_and_typs name tenv
           |> Caml.List.fold_left 
@@ -115,23 +142,27 @@ let mk_tmap loc_typs tenv tmap =
   in
   Caml.List.fold_right (f TypSet.empty) loc_typs tmap
 
-let init_heap loc_typs tenv heap tmap = (* loc_types: local list *)
+let init_heap ~this ~do_array loc_typs tenv heap tmap = (* loc_types: local list *)
   let module TypSet = PrettyPrintable.MakePPSet(struct include Typ let pp = pp_full Pp.text end) in
   let is_gt l1 l2 = (Loc.compare l1 l2) = 1 in
   let pos_aliases addr typ tmap =
     TypMap.find typ tmap ~default:LocSet.empty
     |> LocSet.filter (fun x -> is_gt addr x && (Loc.is_pointer x || Loc.is_offset x))
+    |> LocSet.filter (AliasEnv.is_alias addr)
   in
-  let handle_alias base_cst addr pos_a = 
-    let v, cst = LocSet.fold 
-      ((fun alias (v, cst) ->
-        let cst_eq = Cst.cst_eq alias addr in
-        let cst_neq = Cst.cst_not cst_eq in
-        let cst' = Cst.cst_and cst cst_eq in
-        Helper.(v + Val.singleton (alias, cst')), Cst.cst_and cst cst_neq))
-      pos_a (Val.empty, base_cst)
-    in
-    Val.add (addr, cst) v
+  let handle_alias base_cst addr pos_a = (
+    if not this then
+      let v, cst = LocSet.fold 
+        ((fun alias (v, cst) ->
+          let cst_eq = Cst.cst_eq alias addr in
+          let cst_neq = Cst.cst_not cst_eq in
+          let cst' = Cst.cst_and cst cst_eq in
+          Helper.(v + Val.singleton (alias, cst')), Cst.cst_and cst cst_neq))
+        pos_a (Val.empty, base_cst)
+      in
+      Val.add (addr, cst) v
+    else 
+      Val.singleton (addr, base_cst))
   in
   let mk_new_base_cst base_cst addr pos_a =
     (* make (a1 != addr) ^ (a2 != addr) ^ ... ^ (an != addr) *)
@@ -147,59 +178,80 @@ let init_heap loc_typs tenv heap tmap = (* loc_types: local list *)
       let visited' = TypSet.add typ visited in
       match desc with
       | Tptr (ptr_typ, kind) ->
-          let ptr_loc = Loc.mk_pointer addr in
+          let ptr_loc = 
+            if this && not (Loc.is_explicit addr) then (* 'this' value in constructors *)
+              Loc.mk_concrete_pointer addr 
+            else
+              Loc.mk_var_pointer addr
+          in
           let pos_a = pos_aliases ptr_loc ptr_typ tmap in
           let heap' = handle_alias base_cst ptr_loc pos_a
             |> (fun x -> Heap.add addr x heap)
           in
           let new_cst = mk_new_base_cst base_cst ptr_loc pos_a in
           iter_loc visited' new_cst heap' (ptr_loc, ptr_typ)
-      | Tstruct name ->
+      | Tstruct name -> (
+        if not this then
           Helper.get_fld_and_typs name tenv
           |> Caml.List.fold_left
               (fun heap (field, typ) ->
                 iter_loc visited' base_cst heap (Loc.mk_offset addr (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap 
+        else
+          heap)
       | Tarray {elt; length = Some i} -> (* fixed size arrays *)
-          (*let loc' = Loc.unwrap_ptr addr in (* C allocates array location directly to variable address *)
-          let index = (IntLit.to_int_exn i) - 1 in
-          let rec mk_array i heap = 
-            if i = -1 then heap
-            else
-              iter_loc struct_typs base_cst heap (Loc.mk_offset loc' (Loc.mk_const_of_z (Z.of_int i)), (Typ.mk (Tptr (elt, Pk_pointer)))) 
-              |> mk_array (i - 1)
-          in
-          mk_array index heap*)
-          heap
+          if do_array then
+            let loc' = Loc.unwrap_ptr addr in (* C allocates array location directly to variable address *)
+            let index = (IntLit.to_int_exn i) - 1 in
+            let rec mk_array i heap = 
+              if i = -1 then heap
+              else
+                iter_loc visited base_cst heap (Loc.mk_offset loc' (Loc.mk_const_of_z (Z.of_int i)), (Typ.mk (Tptr (elt, Pk_pointer)))) 
+                |> mk_array (i - 1)
+            in
+            mk_array index heap
+          else
+            heap
       | _ -> 
           heap
   in
-  Caml.List.fold_left (iter_loc TypSet.empty Cst.cst_true) heap loc_typs
+  let res = Caml.List.fold_left (iter_loc TypSet.empty Cst.cst_true) heap loc_typs in
+  res
 
 let init tenv pdesc =
   let scope = VVar.mk_scope (Typ.Procname.to_string (Procdesc.get_proc_name pdesc)) in
+  let globs, do_array = 
+    if GlobalEnv.is_global_var_init_fun pdesc then
+      (match GlobalEnv.get_initialized_global pdesc with
+      | Some (pvar, typ) ->
+          [VVar.of_pvar pvar, typ], true
+      | None ->
+          [], false)
+    else 
+      [], false
+  in
   let arg_vars = (Caml.List.map
     (fun (arg, typ) -> (VVar.of_string (Mangled.to_string arg) ~proc:scope, typ))
     (Procdesc.get_formals pdesc)) 
     @ (GlobalEnv.get_glob_vars ())
   in
-  let local_vars = 
-    if GlobalEnv.is_global_var_init_fun pdesc then
-      (match GlobalEnv.get_initialized_global pdesc with
-      | Some (pvar, typ) ->
-          [VVar.of_pvar pvar, typ]
-      | None ->
-          [])
-    else
-      Caml.List.map
+  let local_vars = globs
+      (* @ Caml.List.map
       (fun (var: ProcAttributes.var_data) -> VVar.of_string (Mangled.to_string var.name) ~proc:scope, var.typ)
-      (Procdesc.get_locals pdesc)
+      (Procdesc.get_locals pdesc)*)
   in
   let locs_arg, locs_loc = 
     (fun (var, typ) -> Loc.mk_explicit var, Typ.mk (Tptr (typ, Pk_pointer)))
     |> (fun f -> (Caml.List.map f arg_vars, Caml.List.map f local_vars))
   in
-  if (Typ.Procname.is_constructor (Procdesc.get_proc_name pdesc)) then
-    Heap.empty (*init_heap (locs_arg @ locs_loc) tenv Heap.empty TypMap.empty*)
-  else
-    let tmap = mk_tmap locs_arg tenv TypMap.empty in
-    init_heap (locs_arg @ locs_loc) tenv Heap.empty tmap
+  let res = 
+    if (Typ.Procname.is_constructor (Procdesc.get_proc_name pdesc)) then
+      let this_arg = Caml.List.hd (locs_arg @ locs_loc) in
+      let rest_args = Caml.List.tl (locs_arg @ locs_loc) in
+      let tmap = mk_tmap (Caml.List.tl locs_arg) tenv TypMap.empty in
+      init_heap ~this:false ~do_array rest_args tenv (init_heap ~this:true ~do_array [this_arg] tenv Heap.empty tmap) tmap
+    else
+      let tmap = mk_tmap locs_arg tenv TypMap.empty in
+      init_heap ~this:false ~do_array (locs_arg @ locs_loc) tenv Heap.empty tmap
+  in
+  let () = L.progress "#INIT: %a\n@." Heap.pp res in
+  res
