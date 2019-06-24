@@ -19,14 +19,14 @@ module ModelHelper = struct
     Buffer.contents buf
 
   (* convert Var.t into string *)
-  let string_of_var Var.({name; proc; kind}) =
+  let string_of_var VVar.({name; proc; kind}) =
     let proc' = match proc with
-      | Var.GB -> ""
-      | Var.Proc f -> f in
+      | VVar.GB -> ""
+      | VVar.Proc f -> f in
     let kind' = match kind with
-      | Var.Temp -> "T"
-      | Var.Local -> "L"
-      | Var.Global -> "G" in
+      | VVar.Temp -> "T"
+      | VVar.Local -> "L"
+      | VVar.Global -> "G" in
     kind' ^ proc' ^ "$" ^ name
 
   (* destruct Loc.t and make flat string *)
@@ -36,9 +36,9 @@ module ModelHelper = struct
     | Loc.Implicit s -> "im$$" ^ encode_name s
     | Loc.Const v ->
       (match v with
-         | Loc.Integer i -> string_of_int i
+         | Loc.Z i -> Z.to_string i
          | Loc.String s -> "\"" ^ String.escaped s ^ "\"")
-    | Loc.Pointer p -> "ptr$$" ^ simple_destruct_loc' p
+    | Loc.Pointer (p, _, _) -> "ptr$$" ^ simple_destruct_loc' p
     | Loc.FunPointer p -> "fp$$" ^ InferIR.Typ.Procname.to_string p
     | Loc.Offset (u, v) ->
       "off$$" ^ simple_destruct_loc' u ^ "$" ^ simple_destruct_loc' v
@@ -257,7 +257,7 @@ module ModelHelper = struct
 
   let get_int_from_heap loc heap =
     match get_const_from_heap loc heap with
-    | Some (Loc.Integer i) -> Some i
+    | Some (Loc.Z i) -> Some (Z.to_int i)
     | _ -> None
 
   (* get inner Loc.t from ptr#IM#*:*:arg* *)
@@ -390,7 +390,7 @@ module SimpleModel : GeneratorModel = struct
 
   let destruct_loc proc stk =
     function
-      | Loc.Pointer (Loc.Explicit Loc.{name; proc = Proc p})
+      | Loc.Pointer (Loc.Explicit Loc.{name; proc = Proc p}, _, _)
           when p = ProcInfo.get_name proc ->
         let id = if name = ProcInfo.get_arg_name_this proc
           then "this" else name in
@@ -409,8 +409,8 @@ module SimpleModel : GeneratorModel = struct
         let pkg = List.rev pkg_r in
         let rec g cond i =
           if not (cond i) then ()
-          else let l_arr = Loc.Offset (mths, Loc.Const (Loc.Integer i)) in
-               let l_ptr = Loc.Pointer l_arr in
+          else let l_arr = Loc.Offset (mths, Loc.Const (Loc.Z (Z.of_int i))) in
+               let l_ptr = Loc.Pointer (l_arr, Loc.ConcreteLoc, false) in
                let off s = Loc.Offset (l_ptr, Loc.Const (Loc.String s)) in
                let find field =
                  match Heap.find_opt (off field) heap with
