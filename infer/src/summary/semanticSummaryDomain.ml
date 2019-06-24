@@ -166,6 +166,18 @@ module Loc = struct
 
   let is_fun_pointer = function FunPointer _ -> true | _ -> false
 
+  let is_jni_fun_pointer = function 
+    | FunPointer pn -> 
+        let n = Typ.Procname.to_string pn in
+        String.is_prefix n ~prefix:"__JNIFUN__" 
+    | _ -> false
+
+  let get_jni_fun_name_exn = function 
+    |  FunPointer pn -> 
+        let n = Typ.Procname.to_string pn in
+        String.sub n 10 ((String.length n) - 10) 
+    | _ -> failwith "this is not a jni fun pointer"
+
   let is_ret = function Ret _ -> true | _ -> false
 
   let is_offset = function Offset _ -> true | _ -> false

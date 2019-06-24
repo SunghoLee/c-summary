@@ -377,9 +377,35 @@ module TransferFunctions = struct
               mk_domain heap logs)
 
       | Call ((id, ret_typ), e, args, loc, flag) -> 
-          let () = L.progress "FUN_EXPR: %a\n@." Val.pp (exec_expr scope loc heap e) in
-          mk_domain heap logs
-
+          let fval = exec_expr scope loc heap e in
+          if Val.exists (fun (l, _) -> Loc.is_jni_fun_pointer l) fval then
+            let lhs_addr = Loc.of_id id ~proc:scope in
+            let ret_addr = Loc.mk_implicit ((Location.to_string loc) ^ ":ret") in
+            let ret_addr_ptr = Loc.mk_concrete_pointer ret_addr in
+            let heap' = Heap.add lhs_addr (Val.singleton (ret_addr, Cst.cst_true)) heap
+              |> Heap.add ret_addr (Val.singleton (ret_addr_ptr, Cst.cst_true)) 
+            in
+            let arg_index = ref (Caml.List.length args) in
+            let dumped_heap, arg_addrs = Caml.List.fold_right 
+              (fun (arg_expr, _) (dumped_heap, arg_addrs) ->
+                let () = (arg_index := !arg_index - 1) in
+                let arg_name = (Location.to_string loc) ^ ":arg" ^ (string_of_int !arg_index) in
+                let arg_addr = Loc.mk_implicit arg_name in
+                let arg_v = exec_expr scope loc dumped_heap arg_expr in
+                (Heap.add arg_addr arg_v dumped_heap, arg_addr :: arg_addrs))
+              args (heap', [])
+            in
+            let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
+            let logs' = Val.fold (fun (l, _) logs -> 
+              if Loc.is_jni_fun_pointer l then
+                let jnifun = Loc.get_jni_fun_name_exn l |> JNIFun.of_string in
+                let log = LogUnit.mk [cs] ret_addr jnifun arg_addrs dumped_heap in
+                CallLogs.add log logs
+              else logs) fval logs
+            in
+            mk_domain heap' logs'
+          else
+            mk_domain heap logs
       | Call _ ->
           let () = L.progress "Not support function pointers\n@." in
           mk_domain heap logs
@@ -422,7 +448,7 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
           let opt_astate = Domain.optimize p ~scope:(VVar.mk_scope (Typ.Procname.to_string proc_name)) ~rm_tmp: true in
-          (*L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
+      (*    L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
           L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some opt_astate}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}

@@ -172,7 +172,8 @@ let init_heap ~this ~do_array loc_typs tenv heap tmap = (* loc_types: local list
   in
   let rec iter_loc visited base_cst heap (addr, typ) = 
     (* base_cst: inherited constraint *)
-    if JniModel.is_jni_struct typ || TypSet.mem typ visited then heap
+    if JniModel.is_jni_env_for_c typ then JniModel.put_jni_env_modeling addr heap
+    else if JniModel.is_jni_struct typ || TypSet.mem typ visited then heap
     else 
       let desc = typ.Typ.desc in
       let visited' = TypSet.add typ visited in
