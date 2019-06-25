@@ -193,6 +193,42 @@ let sort_logs =
     CallSite.compare_list c1 c2 in
   List.sort cmp
 
+(* solve_dependency: reorder logs by ret-args dependencies *)
+let solve_dependency logs =
+  let rec rev_join a = function
+    | [] -> a
+    | (_, x) :: xs -> rev_join (x :: a) xs in
+  let rec find_dep r x = function
+    | [] -> r
+    | y :: ys ->
+      let y' = LogUnit.get_rloc y in
+      let r' = if List.mem y' x
+        then Some y'
+        else r in
+      find_dep r' x ys in
+  let rec check_unsat stk unsat x = function
+    | [] -> stk, List.rev unsat
+    | (d, y) :: ys ->
+      if x.LogUnit.rloc = d
+      then check_unsat (y :: stk) unsat x ys
+      else check_unsat stk ((d, y) :: unsat) x ys in
+  let rec f stk unsat = function
+    | [] -> rev_join stk unsat
+    | x :: xs ->
+      let heap = LogUnit.get_heap x in
+      let x_args = LogUnit.get_args x in
+      let x' = List.map (H.unpack_arg heap) x_args in
+      let t = find_dep None x' xs in
+      let stk', unsat' = match t with
+        | None -> x :: stk, unsat
+        | Some z -> stk, ((z, x) :: unsat) in
+      let stk'', unsat'' = check_unsat stk' [] x unsat' in
+      f stk'' unsat'' xs
+  in
+  logs
+  |> f [] []
+  |> List.rev
+
 (* get_summary_k: get procedure's summary and pass it to the callback `cb` *)
 let get_summary_k proc default cb =
   match Summary.get proc with
@@ -204,6 +240,7 @@ let get_summary_k proc default cb =
 let parse_body state name {heap; logs} =
   CallLogs.fold (fun e l -> e :: l) logs []
   |> sort_logs
+  |> solve_dependency
   |> M.method_body state name heap
   
 (* Generator *)
