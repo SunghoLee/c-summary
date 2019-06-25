@@ -230,7 +230,7 @@ let insert_method pkgclss (pkg, cls, mth, sign)
 let gen_compilation_units pkgclss =
   PkgClss.fold
     (fun (pkg, cls) a b ->
-      let c = mk_public_class cls (List.map (fun x -> Y.Method x) a) in
+      let c = mk_public_class (cls ^ "_") (List.map (fun x -> Y.Method x) a) in
       let p = match pkg with
         | [] -> None
         | _ -> Some (List.map (fun x -> Y.ident x 0) pkg) in
@@ -277,7 +277,7 @@ let write_as_files base_dir result =
                let dir = if List.length pkg = 0
                          then "."
                          else String.concat "/" pkg in
-               let f = dir ^ "/" ^ cls ^ ".java" in
+               let f = dir ^ "/" ^ cls ^ "_.java" in
                Printf.printf "Make a file \"%s\"...\n" f;
                let _ = Sys.command ("mkdir -p \"" ^ dir ^ "\"") in
                let oc = open_out f in
