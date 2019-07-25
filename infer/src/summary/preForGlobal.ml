@@ -105,6 +105,13 @@ module NameType = struct
     |> (fun x -> union x lhs rhs)
 
   let widen ~prev ~next ~num_iters = join prev next
+
+  let add pvar typ m =
+    if mem pvar m then
+      let pre_typ = find pvar m in
+      add pvar (choose_most_specific_one typ pre_typ) m
+    else
+      add pvar typ m
 end
 
 module TransferFunctions (CFG : ProcCfg.S) = struct
