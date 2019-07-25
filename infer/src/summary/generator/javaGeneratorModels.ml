@@ -410,7 +410,7 @@ module SimpleModel : GeneratorModel = struct
         let rec g cond i =
           if not (cond i) then ()
           else let l_arr = Loc.Offset (mths, Loc.Const (Loc.Z (Z.of_int i))) in
-               let l_ptr = Loc.Pointer (l_arr, Loc.ConcreteLoc, false) in
+               let l_ptr = Loc.Pointer (l_arr, Loc.LocVar, false) in
                let off s = Loc.Offset (l_ptr, Loc.Const (Loc.String s)) in
                let find field =
                  match Heap.find_opt (off field) heap with
