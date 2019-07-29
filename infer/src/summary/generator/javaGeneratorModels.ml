@@ -89,10 +89,12 @@ module ModelHelper = struct
     [ "Get", "Field";
       "Call", "Method";
       "GetStatic", "Field";
-      "CallStatic", "Method" ]
+      "CallStatic", "Method";
+      "Get", "ArrayElement" ]
 
   let jni_name_pt_array_list = [
-    "New", "Array" ]
+    "New", "Array";
+    "Get", "ArrayElements"]
 
   let get_jni_pt_ret_type' (lst : (string * string) list) suffix name =
     let rec f x = match x with
@@ -159,6 +161,7 @@ module ModelHelper = struct
       "NewObjectArray",  "Object[]";
       "GetObjectArrayElement", "Object";
       "GetPrimitiveArrayCritical", "__Pointer";
+      "GetObjectArrayElements", "Object[]";
 
       "MonitorEnter", "int";
       "MonitorExit", "int";
@@ -374,8 +377,8 @@ module SimpleModel : GeneratorModel = struct
   | JField of Y.typ option * Y.ident * Y.typ
            (* cls          * name    * type *)
   type stack = (string * java_val) list
-  let top = Y.(Call (Y.Name [ident jni_class_name 0;
-                             ident top_name 0], []))
+  let top = Y.(Call (Name [ident jni_class_name 0;
+                           ident top_name 0], []))
 
   (* make assignment stmt *)
   let mk_assign typ name init_val =
@@ -511,6 +514,11 @@ module SimpleModel : GeneratorModel = struct
       let v' = match ret_type with
         | Y.TypeName [n] when Y.id_string n = model_pkg_name ^ ".__Unknown" ->
           top
+        | Y.TypeName [n] when Y.id_string n = "boolean" ->
+          Y.Name [Y.ident (match destruct_loc proc rets v with
+                          | Y.Literal n when not (String.equal n "0") ->
+                            "true"
+                          | _ -> "false" ) 0]
         | _ -> destruct_loc proc rets v in
       let v'' = Y.Cast (ret_type, v') in
       Some (Y.Return (Some v''))

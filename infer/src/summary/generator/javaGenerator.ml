@@ -80,6 +80,8 @@ let unescape_java_name name =
       if c = '_'
       then match String.get name (idx + 1) with
         | '_' -> add_c ':'; f (idx + 2)
+        | '0' when String.length name >= idx + 6 ->
+            add_c (Char.chr (int_of_string ("0x" ^ String.sub name (idx + 2) 4))); f (idx + 6)
         | '1' -> add_c '_'; f (idx + 2)
         | '2' -> add_c ';'; f (idx + 2)
         | '3' -> add_c '['; f (idx + 2)
@@ -170,7 +172,7 @@ let parse_formals is_java
             Y.({v_mods = [];
                 v_type = parse_type t;
                 v_name = ident (InferIR.Mangled.to_string m) 0})) in
-  if is_java
+  if is_java && List.length formals >= 2
   then
     let fs = List.tl formals in
     let is_static = is_jclass (snd (List.hd fs)) in
@@ -251,13 +253,23 @@ module PkgClss = Map.Make(struct
   let compare a b = compare a b
 end)
 
+let encode_class_name name =
+  let l = String.length name in
+  let buf = Buffer.create (l * 2) in
+  let rec f idx =
+    if idx >= l then Buffer.contents buf
+    else match String.get name idx with
+      | '$' -> Buffer.add_string buf "__"; f (idx + 1)
+      | x -> Buffer.add_char buf x; f (idx + 1)
+  in f 0 ^ "_"
+
 (* insert_method: insert method into PkgClss-Methods map *)
 let insert_method pkgclss (pkg, cls, mth, sign)
                   static ret_type formals body =
   let mods = [Y.Public] @ if static then [Y.Static] else [] in
   let m = mk_method mods mth ret_type formals [] body in
   PkgClss.update
-    (pkg, cls)
+    (pkg, encode_class_name cls)
     (function
      | None -> Some [m]
      | Some s -> Some (m :: s))
@@ -267,7 +279,7 @@ let insert_method pkgclss (pkg, cls, mth, sign)
 let gen_compilation_units pkgclss =
   PkgClss.fold
     (fun (pkg, cls) a b ->
-      let c = mk_public_class (cls ^ "_") (List.map (fun x -> Y.Method x) a) in
+      let c = mk_public_class cls (List.map (fun x -> Y.Method x) a) in
       let p = match pkg with
         | [] -> None
         | _ -> Some (List.map (fun x -> Y.ident x 0) pkg) in
@@ -314,7 +326,7 @@ let write_as_files base_dir result =
                let dir = if List.length pkg = 0
                          then "."
                          else String.concat "/" pkg in
-               let f = dir ^ "/" ^ cls ^ "_.java" in
+               let f = dir ^ "/" ^ cls ^ ".java" in
                Printf.printf "Make a file \"%s\"...\n" f;
                let _ = Sys.command ("mkdir -p \"" ^ dir ^ "\"") in
                let oc = open_out f in
