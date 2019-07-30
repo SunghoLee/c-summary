@@ -496,7 +496,10 @@ module SimpleModel : GeneratorModel = struct
     let ret = LogUnit.get_rloc log
       |> H.simple_destruct_loc' in
     let e = Y.Call (fn, args') in
-    let s = mk_assign (H.get_jni_ret_type mth) ret e in
+    let in_stk = List.mem_assoc ret stk in
+    let s = match H.get_jni_ret_type mth with
+      | None -> mk_assign None ret e
+      | Some t -> mk_assign (Some (if in_stk then Y.TypeName [Y.ident "" 0] else t)) ret e in
     let stk' = update_stk state proc stk heap ret mth args in
     s :: lst, stk'
 
