@@ -7,7 +7,8 @@ open SemanticSummaryDomain
 open Pervasives
 open SUtils
 
-let print_progress total cur = 
+let print_progress total cur = ()
+  (*
   let total = float_of_int total in
   let cur = float_of_int cur in
   let base = if total <. 100.0 then 1.0 else total /. 100.0 in
@@ -20,7 +21,7 @@ let print_progress total cur =
   for i = 1 to (int_of_float t) do
       str := !str ^ " "
   done;
-  L.progress "%s (%d / %d)\r" (!str ^ "|") (int_of_float cur) (int_of_float total)
+  L.progress "%s (%d / %d)\r" (!str ^ "|") (int_of_float cur) (int_of_float total)*)
 
 let rec fp_mk_ienv caller_scope callee_heap caller_heap ienv =
   let module Cache = PrettyPrintable.MakePPMap(Loc) in
@@ -66,13 +67,13 @@ let rec fp_mk_ienv caller_scope callee_heap caller_heap ienv =
 (* construct an instantiation environment at call sites. *)
 let mk_ienv tenv caller_scope params args callee_heap caller_heap = 
     let start_gettimeofday = Unix.gettimeofday () in
-    let () = L.progress "#Start making IEnv\n@." in
+    (*let () = L.progress "#Start making IEnv\n@." in*)
   let all_params = (GlobalEnv.get_glob_pvars () 
       |> Caml.List.map (fun (glob, typ) -> (Loc.of_pvar glob), Typ.mk (Tptr (typ, Pk_pointer))))
     @ Caml.List.map (fun (param, typ) -> (Loc.mk_explicit param), Typ.mk (Tptr (typ, Pk_pointer))) params
   in
   let all_param_gettimeofday = Unix.gettimeofday () in
-    let () = L.progress "\t AllParams: %f\n@." (all_param_gettimeofday -. start_gettimeofday) in
+    (*let () = L.progress "\t AllParams: %f\n@." (all_param_gettimeofday -. start_gettimeofday) in*)
   let heap' = Caml.List.fold_left2
     (fun heap (param, typ) arg -> Heap.add param arg heap)
     caller_heap all_params args
@@ -83,7 +84,7 @@ let mk_ienv tenv caller_scope params args callee_heap caller_heap =
   in
   let res = fp_mk_ienv caller_scope callee_heap heap' ienv |> InstEnv.optimize in
   let end_gettimeofday = Unix.gettimeofday () in
-  let () = L.progress "\tDone.: %f\n@." (end_gettimeofday -. start_gettimeofday) in
+  (*let () = L.progress "\tDone.: %f\n@." (end_gettimeofday -. start_gettimeofday) in*)
   res
 
 (* instantiate a constraint *)

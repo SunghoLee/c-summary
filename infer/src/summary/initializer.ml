@@ -254,5 +254,5 @@ let init tenv pdesc =
       let tmap = mk_tmap locs_arg tenv TypMap.empty in
       init_heap ~this:false ~do_array (locs_arg @ locs_loc) tenv Heap.empty tmap
   in
-  let () = L.progress "#INIT: %a\n@." Heap.pp res in
+  (*let () = L.progress "#INIT: %a\n@." Heap.pp res in*)
   res

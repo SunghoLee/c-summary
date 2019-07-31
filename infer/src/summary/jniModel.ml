@@ -44,8 +44,15 @@ let is_jni f =
 let is_jni_env_for_c typ =
   match Typ.name typ with
   | Some s -> 
-      (Typ.Name.name s) = "JNINativeInterface" 
+      (Typ.Name.name s) = "JNINativeInterface_" 
   | None ->
+      false
+
+let is_jni_env_ptr_for_c typ =
+  match typ.Typ.desc with
+  | Tptr (typ', _) ->
+      is_jni_env_for_c typ'
+  | _ ->
       false
 
 let is_java_native f = 

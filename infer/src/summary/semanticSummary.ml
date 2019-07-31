@@ -100,7 +100,7 @@ module TransferFunctions = struct
 
   let rec get_proc_summary ?caller do_clear callee_name = 
     Ondemand.clear_cache ();
-    let () = L.progress "Request summary of %s\n@." (Typ.Procname.to_string callee_name) in
+    (*let () = L.progress "Request summary of %s\n@." (Typ.Procname.to_string callee_name) in*)
     let () = AnalysisTargets.add_target callee_name in
     let sum = 
       match caller with
@@ -206,13 +206,13 @@ module TransferFunctions = struct
                             let h' = Heap.union (fun l v1 v2 -> Some (Val.union v1 v2)) heap end_heap in
                             h', rhs_v :: vlist
                         | None ->
-                            let () = L.progress "Does not exist summary: %s\n@." (Typ.Procname.to_string callee_pname) in
+                            (*let () = L.progress "Does not exist summary: %s\n@." (Typ.Procname.to_string callee_pname) in*)
                             h, Val.empty :: vlist)
                   | None ->
-                      let () = L.progress "Does not exist proc descriptor: %s\n@." (Typ.Procname.to_string callee_pname) in
+                      (*let () = L.progress "Does not exist proc descriptor: %s\n@." (Typ.Procname.to_string callee_pname) in*)
                       h, Val.empty :: vlist)
               | None -> 
-                  let () = L.progress "Does not exist proc descriptor: %a\n@." (Pvar.pp Pp.text) pvar in
+                  (*let () = L.progress "Does not exist proc descriptor: %a\n@." (Pvar.pp Pp.text) pvar in*)
                   h, Val.empty :: vlist)
             | _ ->
                 h, exec_expr scope location heap arg :: vlist))
@@ -235,7 +235,7 @@ module TransferFunctions = struct
 
   let exec_instr : Domain.t -> extras ProcData.t -> CFG.Node.t -> Sil.instr -> Domain.t = 
     fun {heap; logs} {pdesc; tenv; extras} node instr ->
-      let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in
+      (*let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in*)
       let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
       let scope = VVar.mk_scope proc_name in
       match instr with
@@ -251,11 +251,20 @@ module TransferFunctions = struct
                   let heap'' = Heap.add lhs_addr (Helper.load rhs_v heap') heap' in
                   mk_domain heap'' logs
               | None ->
-                  let () = L.progress "Does not exist summary: %s\n@." (Typ.Procname.to_string callee_pname) in
+                  (*let () = L.progress "Does not exist summary: %s\n@." (Typ.Procname.to_string callee_pname) in*)
                   mk_domain heap logs) 
           | None ->
-              let () = L.progress "Does not exist initializer: %a\n@."  Loc.pp lhs_addr in
+              (*let () = L.progress "Does not exist initializer: %a\n@."  Loc.pp lhs_addr in*)
               mk_domain heap logs)
+
+      | Load (id, e1, typ, loc) when JniModel.is_jni_env_ptr_for_c typ -> 
+          let lhs_addr = Loc.of_id id ~proc:scope in
+          let lhs_ptr_addr = Loc.mk_concrete_pointer lhs_addr in
+          let lhs_ptr_ptr_addr = Loc.mk_concrete_pointer lhs_ptr_addr in
+          let heap' = JniModel.put_jni_env_modeling lhs_ptr_ptr_addr heap in
+          let heap'' = Heap.add lhs_addr (Val.singleton (lhs_ptr_addr, Cst.cst_true)) heap' in
+          let heap''' = Heap.add lhs_ptr_addr (Val.singleton (lhs_ptr_ptr_addr, Cst.cst_true)) heap'' in
+          mk_domain heap''' logs
 
       | Load (id, e1, typ, loc) -> 
           let lhs_addr = Loc.of_id id ~proc:scope in
@@ -343,7 +352,7 @@ module TransferFunctions = struct
                     args_v
                 in
                 let ienv = Instantiation.mk_ienv tenv scope (fun_params callee_desc) args_v' end_heap heap'' in
-                let () = L.progress "# Start composition.\n@." in
+                (*let () = L.progress "# Start composition.\n@." in*)
                 let start_gettimeofday = Unix.gettimeofday () in
                 let heap''' = Instantiation.comp_heap heap'' heap'' end_heap ienv in
                 (*let () = print_to_file heap'' end_heap heap''' ienv in
@@ -353,7 +362,7 @@ module TransferFunctions = struct
                 let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
                 let logs' = Instantiation.comp_log cs logs end_logs heap''' ienv in
                 let end_gettimeofday = Unix.gettimeofday () in
-                let () = L.progress "\tDone: %f\n@." (end_gettimeofday -. start_gettimeofday) in
+                (*let () = L.progress "\tDone: %f\n@." (end_gettimeofday -. start_gettimeofday) in*)
                 let ret_addr = Loc.mk_ret_of_pname callee_pname in
                 let heap'''' = 
                   (match Heap.find_opt ret_addr heap''' with
@@ -369,11 +378,11 @@ module TransferFunctions = struct
                 in
                 mk_domain heap'''' logs'
               | None -> 
-                  let () = L.progress "Not existing callee. Just ignore this call.\n@." in
+                  (*let () = L.progress "Not existing callee. Just ignore this call.\n@." in*)
                   mk_domain heap logs
                   )
           | None -> 
-              let () = L.progress "Not existing callee (empty declaration). Just ignore this call.\n@." in
+              (*let () = L.progress "Not existing callee (empty declaration). Just ignore this call.\n@." in*)
               mk_domain heap logs)
 
       | Call ((id, ret_typ), e, args, loc, flag) -> 
@@ -407,7 +416,7 @@ module TransferFunctions = struct
           else
             mk_domain heap logs
       | Call _ ->
-          let () = L.progress "Not support function pointers\n@." in
+          (*let () = L.progress "Not support function pointers\n@." in*)
           mk_domain heap logs
 
       | Nullify (pid, loc) -> 
@@ -448,8 +457,8 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
           let opt_astate = Domain.optimize p ~scope:(VVar.mk_scope (Typ.Procname.to_string proc_name)) ~rm_tmp: true in
-      (*    L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
-          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
+          (*L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;*)
+          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some opt_astate}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 

@@ -13,7 +13,8 @@ module L = Logging
 
 let widen_iter = 5
 
-let print_progress total cur = 
+let print_progress total cur = ()
+  (*
   let total = float_of_int total in
   let cur = float_of_int cur in
   let base = if total <. 100.0 then 1.0 else total /. 100.0 in
@@ -26,7 +27,7 @@ let print_progress total cur =
   for i = 1 to (int_of_float t) do
       str := !str ^ " "
   done;
-  L.progress "%s (%d / %d)\r" (!str ^ "|") (int_of_float cur) (int_of_float total)
+  L.progress "%s (%d / %d)\r" (!str ^ "|") (int_of_float cur) (int_of_float total)*)
 
 module VVar = struct
   type t = {name: string; proc: var_scope; kind: var_kind}
@@ -193,7 +194,7 @@ module Loc = struct
   let mk_pointer ?dyn typ i = 
     match dyn with
     | Some true ->
-        let () = L.progress "Make Dyn Loc: %a\n@." pp i in
+        (*let () = L.progress "Make Dyn Loc: %a\n@." pp i in*)
         Pointer (i, typ, true)
     | _ ->
         Pointer (i, typ, false)
@@ -633,7 +634,7 @@ module InstEnv = struct
   let optimize ienv =
       let start_gettimeofday = Unix.gettimeofday () in
       let total = (size ienv) in
-      let () = L.progress "#IENV optimizing(%d)!\n@." total in
+      (*let () = L.progress "#IENV optimizing(%d)!\n@." total in*)
       let cur = ref 0 in
       let ppp = print_progress total in
       let res = fold 
@@ -643,7 +644,7 @@ module InstEnv = struct
         if Val.is_empty v' then ienv else add loc v' ienv)
       ienv empty in
       let end_gettimeofday = Unix.gettimeofday () in
-      let () = L.progress "\n\tDone IENV Opt: %f\n@." (end_gettimeofday -. start_gettimeofday) in
+      (*let () = L.progress "\n\tDone IENV Opt: %f\n@." (end_gettimeofday -. start_gettimeofday) in*)
       res
 
 end
@@ -829,7 +830,7 @@ module Heap = struct
 
   let optimize ?scope ?flocs ?rm_tmp heap = 
     let no_rm_tmp = match rm_tmp with Some true -> false | None -> true in
-    let () = L.progress "#Start Heap Optimization\n@." in
+    (*let () = L.progress "#Start Heap Optimization\n@." in*)
     let start_gettimeofday = Unix.gettimeofday () in
     let is_seed = 
       match scope with
@@ -840,7 +841,7 @@ module Heap = struct
     in
     let hdg = HeapDepGraph.make heap in
     let seed_gettimeofday = Unix.gettimeofday () in
-    let () = L.progress "\t Found seeds: %f\n@." (seed_gettimeofday -. start_gettimeofday) in
+    (*let () = L.progress "\t Found seeds: %f\n@." (seed_gettimeofday -. start_gettimeofday) in*)
     let locs = (
       match flocs with
       | Some s ->
@@ -849,20 +850,20 @@ module Heap = struct
           fold (fun loc _ ls -> if is_seed loc then loc :: ls else ls) heap [])
     in
     let locs_gettimeofday = Unix.gettimeofday () in
-    let () = L.progress "\t Initial Locs: %f\n@." (locs_gettimeofday -. seed_gettimeofday) in
+    (*let () = L.progress "\t Initial Locs: %f\n@." (locs_gettimeofday -. seed_gettimeofday) in*)
     let heap' = HeapDepGraph.get_closure locs heap hdg in
     let closure_gettimeofday = Unix.gettimeofday () in
-    let () = L.progress "\t Found Closures: %f\n@." (closure_gettimeofday -. locs_gettimeofday) in
+    (*let () = L.progress "\t Found Closures: %f\n@." (closure_gettimeofday -. locs_gettimeofday) in*)
     let res = opt_cst_in_heap heap' in
     let opt_gettimeofday = Unix.gettimeofday () in
-    let () = L.progress "\n\t Opt: %f\n@." (opt_gettimeofday -. closure_gettimeofday) in
-    let () = L.progress "\t Done.\n@." in
+    (*let () = L.progress "\n\t Opt: %f\n@." (opt_gettimeofday -. closure_gettimeofday) in*)
+    (*let () = L.progress "\t Done.\n@." in*)
     res
 
 
   let join lhs rhs = 
     (* TODO: need to revise this for performance *)
-    let () = L.progress "#Start Heap Optimization in Join!!.\n@." in
+    (*let () = L.progress "#Start Heap Optimization in Join!!.\n@." in*)
     let lhs' = opt_cst_in_heap lhs in
     let rhs' = opt_cst_in_heap rhs in
     union (fun key val1 val2 -> Some (Val.join val1 val2)) lhs' rhs'

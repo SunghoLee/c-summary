@@ -26,7 +26,11 @@ module NameType = struct
       | _, Tarray _ -> 1
       | Tvoid, _ -> 1
       | _, Tvoid -> -1
-      | _ -> failwith (F.asprintf "Not compatible types: %a <> %a" (Typ.pp_full Pp.text) typ1 (Typ.pp_full Pp.text) typ2)
+      | _ -> 
+          if typ1 = typ2 then
+            1
+          else
+            failwith (F.asprintf "Not compatible types: %a <> %a" (Typ.pp_full Pp.text) typ1 (Typ.pp_full Pp.text) typ2)
       (*
       | Tint of ikind  (** integer type *)
       | Tfloat of fkind  (** float type *)
