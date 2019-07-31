@@ -89,10 +89,12 @@ module ModelHelper = struct
     [ "Get", "Field";
       "Call", "Method";
       "GetStatic", "Field";
-      "CallStatic", "Method" ]
+      "CallStatic", "Method";
+      "Get", "ArrayElement" ]
 
   let jni_name_pt_array_list = [
-    "New", "Array" ]
+    "New", "Array";
+    "Get", "ArrayElements"]
 
   let get_jni_pt_ret_type' (lst : (string * string) list) suffix name =
     let rec f x = match x with
@@ -159,6 +161,7 @@ module ModelHelper = struct
       "NewObjectArray",  "Object[]";
       "GetObjectArrayElement", "Object";
       "GetPrimitiveArrayCritical", "__Pointer";
+      "GetObjectArrayElements", "Object[]";
 
       "MonitorEnter", "int";
       "MonitorExit", "int";
@@ -268,6 +271,25 @@ module ModelHelper = struct
         | [] -> loc
         | (l, c) :: xs -> l)
     | _ -> loc
+
+  (* box given type if possible *)
+  let box_type = function
+    | Y.TypeName [n] -> Y.TypeName [Y.ident (match Y.id_string n with
+        | "byte" -> "Byte"
+        | "boolean" -> "Boolean"
+        | "char" -> "Character"
+        | "short" -> "Short"
+        | "int" -> "Integer"
+        | "long" -> "Long"
+        | "float" -> "Float"
+        | "double" -> "Double"
+        | x -> x) 0]
+    | x -> x
+
+  let typename_is name typ =
+    match typ with
+    | Y.TypeName [n] when Y.id_string n = name -> true
+    | _ -> false
 end
 module H = ModelHelper (* alias *)
 
@@ -374,8 +396,8 @@ module SimpleModel : GeneratorModel = struct
   | JField of Y.typ option * Y.ident * Y.typ
            (* cls          * name    * type *)
   type stack = (string * java_val) list
-  let top = Y.(Call (Y.Name [ident jni_class_name 0;
-                             ident top_name 0], []))
+  let top = Y.(Call (Name [ident jni_class_name 0;
+                           ident top_name 0], []))
 
   (* make assignment stmt *)
   let mk_assign typ name init_val =
@@ -493,7 +515,10 @@ module SimpleModel : GeneratorModel = struct
     let ret = LogUnit.get_rloc log
       |> H.simple_destruct_loc' in
     let e = Y.Call (fn, args') in
-    let s = mk_assign (H.get_jni_ret_type mth) ret e in
+    let in_stk = List.mem_assoc ret stk in
+    let s = match H.get_jni_ret_type mth with
+      | None -> mk_assign None ret e
+      | Some t -> mk_assign (Some (if in_stk then Y.TypeName [Y.ident "" 0] else t)) ret e in
     let stk' = update_stk state proc stk heap ret mth args in
     s :: lst, stk'
 
@@ -508,18 +533,29 @@ module SimpleModel : GeneratorModel = struct
     | None -> None
     | Some v ->
       let ret_type = ProcInfo.get_ret_type proc in
-      let v' = match ret_type with
-        | Y.TypeName [n] when Y.id_string n = model_pkg_name ^ ".__Unknown" ->
-          top
-        | _ -> destruct_loc proc rets v in
-      let v'' = Y.Cast (ret_type, v') in
+      let v' = if H.typename_is (model_pkg_name ^ ".__Unknown") ret_type
+        then top
+        else let destructed = destruct_loc proc rets v in
+             if H.typename_is "boolean" ret_type
+             then Y.Name [Y.ident (match destructed with
+                                  | Y.Literal n when not (String.equal n "0") -> "true"
+                                  | _ -> "false" ) 0]
+             else destructed in
+      let ret_type' = H.box_type ret_type in
+      let v'' = Y.Cast (ret_type', v') in
       Some (Y.Return (Some v''))
+
+  let return_top proc =
+    let ret_type = proc |> ProcInfo.get_ret_type |> H.box_type in
+    let v = Y.Cast (ret_type, top) in
+    Y.Return (Some v)
 
   (* API *)
   let method_body state proc heap logs =
     let b, rets = List.fold_left (method_body_sub state proc) ([], []) logs in
     let b' = match method_body_ret proc rets heap with
-             | None -> b
-             | Some x -> x :: b in
+             | None when H.typename_is "void" (ProcInfo.get_ret_type proc) -> b
+             | Some x -> x :: b
+             | _ -> return_top proc :: b in
     List.rev b'
 end
