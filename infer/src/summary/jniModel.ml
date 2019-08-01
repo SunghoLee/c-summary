@@ -44,7 +44,7 @@ let is_jni f =
 let is_jni_env_for_c typ =
   match Typ.name typ with
   | Some s -> 
-      (Typ.Name.name s) = "JNINativeInterface_" 
+      (Typ.Name.name s) = "JNINativeInterface_" || (Typ.Name.name s) = "JNINativeInterface"
   | None ->
       false
 
