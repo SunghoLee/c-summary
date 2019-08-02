@@ -311,7 +311,7 @@ module State = struct
 
   let get_native state name = List.assoc_opt name state.registered
 
-  let fold_name_of state name init cb =
+  let fold_name_of state name cb init =
     let rec f l v = match l with
       | [] -> v
       | (c, j) :: xs when c = name -> cb j v |> f xs
@@ -329,7 +329,8 @@ module ProcInfo = struct
   type t = { name: string;
              kind: kind;
              ret_type: Y.typ;
-             is_entry: bool }
+             is_entry: bool;
+             formals: Y.var list }
 
   let get_name {name} = name
 
@@ -414,9 +415,11 @@ module SimpleModel : GeneratorModel = struct
     function
       | Loc.Pointer (Loc.Explicit Loc.{name; proc = Proc p}, _, _)
           when p = ProcInfo.get_name proc ->
-        let id = if name = ProcInfo.get_arg_name_this proc
-          then "this" else name in
-        Y.Name [Y.ident id 0]
+        if name = ProcInfo.get_arg_name_this proc
+          then Y.Name [Y.ident "this" 0]
+          else if List.mem_assoc name stk
+               then Y.Name [Y.ident name 0]
+               else top
       | x -> match H.simple_destruct_loc x with
         | Y.Name [id] when not (List.mem_assoc (Y.id_string id) stk) -> top
         | y -> y
@@ -453,6 +456,17 @@ module SimpleModel : GeneratorModel = struct
         | None -> g (fun _ -> true) 0
         | Some n' -> g (fun x -> x < n') 0)
     | _ -> ()
+
+  let init_stk ProcInfo.{kind; formals} =
+    let mk name = name, JUnknown in
+    (match kind with
+      | ProcInfo.Static (env, this) -> [mk env; mk this]
+      | ProcInfo.Method (env, this) -> [mk env; mk this]
+      | _ -> [])
+    |> List.fold_right
+      (fun e s -> match e with
+         | { Y.v_name = v_name } -> mk (Y.id_string v_name) :: s)
+      formals
 
   (* update_stk: push class/method/field information into stack *)
   let update_stk state proc stk heap rloc fn args =
@@ -552,7 +566,8 @@ module SimpleModel : GeneratorModel = struct
 
   (* API *)
   let method_body state proc heap logs =
-    let b, rets = List.fold_left (method_body_sub state proc) ([], []) logs in
+    let stk = init_stk proc in
+    let b, rets = List.fold_left (method_body_sub state proc) ([], stk) logs in
     let b' = match method_body_ret proc rets heap with
              | None when H.typename_is "void" (ProcInfo.get_ret_type proc) -> b
              | Some x -> x :: b

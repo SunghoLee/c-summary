@@ -172,7 +172,7 @@ let parse_formals is_java
             Y.({v_mods = [];
                 v_type = parse_type t;
                 v_name = ident (InferIR.Mangled.to_string m) 0})) in
-  if is_java && List.length formals >= 2
+  if (*is_java &&*) List.length formals >= 2
   then
     let fs = List.tl formals in
     let is_static = is_jclass (snd (List.hd fs)) in
@@ -286,22 +286,27 @@ let gen_compilation_units pkgclss =
       (pkg, cls, mk_compilation_unit p [Y.Class c]) :: b)
     pkgclss []
 
+let each_proc_cb' state res s ss proc is_ent procname is_java parsed = 
+  let attr = Summary.get_attributes s in
+  let ret_type = parse_type (attr.ret_type) in
+  let kind, is_static, formals = parse_formals is_java attr.formals in
+  let proc = ProcInfo.({name = procname;
+                        kind = kind;
+                        ret_type = ret_type;
+                        is_entry = is_ent;
+                        formals = formals }) in
+  let body = Y.Block (parse_body state proc ss) in
+  insert_method res parsed is_static ret_type formals body
+
 (* each_proc_cb: process for procedures *)
 let each_proc_cb state res (proc, is_ent) =
   let procname = InferIR.Typ.Procname.to_string proc in
   let is_java, parsed = parse_java_name procname in
   get_summary_k proc (fun () -> res) (fun s ss ->
-    let attr = Summary.get_attributes s in
-    let ret_type = parse_type (attr.ret_type) in
-    let kind, is_static, formals = parse_formals is_java attr.formals in
-    let proc = ProcInfo.({name = procname;
-                          kind = kind;
-                          ret_type = ret_type;
-                          is_entry = is_ent}) in
-    let body = Y.Block (parse_body state proc ss) in
-    let res' = S.fold_name_of state procname res
-      (fun name res -> insert_method res name is_static ret_type formals body)
-    in insert_method res' parsed is_static ret_type formals body)
+    each_proc_cb' state res s ss proc is_ent procname is_java parsed
+    |> S.fold_name_of state procname
+      (fun name res -> 
+         each_proc_cb' state res s ss proc is_ent procname true name))
 
 (* generate: generate compilation_units from infer-out *)
 let generate () =
