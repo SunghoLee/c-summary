@@ -72,7 +72,9 @@ module ModelHelper = struct
                 | "byte" -> "(byte)" ^ s
                 | "char" -> "(char)" ^ s
                 | "short" -> "(short)" ^ s
-                | _ -> s)
+                | "int" -> s
+                | _ -> Y.(Call (Name [ident jni_class_name 0;
+                           ident top_name 0], [])))
     | Loc.Const (Loc.String s) ->
       Y.Literal ("\"" ^ String.escaped s ^ "\"")
     | x -> Y.Name [Y.ident (simple_destruct_loc' x) 0]
@@ -437,12 +439,16 @@ module SimpleModel : GeneratorModel = struct
       Y.LocalVar (Y.({f_var = f_var;
                       f_init = Some (ExprInit init_val)}))
 
+  let get_this_expr proc = match ProcInfo.get_kind proc with
+    | Static _ -> Y.Literal "__JNI.ThisClass()"
+    | _ -> Y.Name [Y.ident "this" 0]
+
   let destruct_loc proc stk =
     function
       | Loc.Pointer (Loc.Explicit Loc.{name; proc = Proc p}, _, _)
           when p = ProcInfo.get_name proc ->
         if name = ProcInfo.get_arg_name_this proc
-          then Y.Name [Y.ident "this" 0]
+          then get_this_expr proc
           else if List.mem_assoc name stk
                then Y.Name [Y.ident name 0]
                else top
@@ -454,7 +460,7 @@ module SimpleModel : GeneratorModel = struct
       | Loc.Pointer (Loc.Explicit Loc.{name; proc = Proc p}, _, _)
           when p = ProcInfo.get_name proc ->
         if name = ProcInfo.get_arg_name_this proc
-          then Y.Name [Y.ident "this" 0]
+          then get_this_expr proc
           else if List.mem_assoc name stk
                then Y.Name [Y.ident name 0]
                else top
