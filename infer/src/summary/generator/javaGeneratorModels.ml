@@ -56,6 +56,28 @@ module ModelHelper = struct
   (* destruct Val.t and make Y.expr *)
   let simple_destruct_val v = Y.Literal (simple_destruct_val' v)
 
+  let typed_simple_destruct_loc typ = function
+    | Loc.Const (Loc.Z value) ->
+      let s = Z.to_string value in
+      let t = match typ with
+        | Y.TypeName [n] -> Y.id_string n
+        | _ -> "" in
+      print_string ("TypeName: " ^ t ^ "\n");
+      Y.Literal (match t with
+                | "boolean" ->
+                    if s = "0" then "false" else "true"
+                | "long" -> s ^ "L"
+                | "float" -> s ^ ".f"
+                | "double" -> s ^ ".0"
+                | "byte" -> "(byte)" ^ s
+                | "char" -> "(char)" ^ s
+                | "short" -> "(short)" ^ s
+                | "int" -> s
+                | _ -> Y.(Call (Name [ident jni_class_name 0;
+                           ident top_name 0], [])))
+    | Loc.Const (Loc.String s) ->
+      Y.Literal ("\"" ^ String.escaped s ^ "\"")
+    | x -> Y.Name [Y.ident (simple_destruct_loc' x) 0]
 
   let string_is_enclosed_in prefix suffix str =
     let pl = String.length prefix in
@@ -209,6 +231,7 @@ module ModelHelper = struct
     | 'Z' -> Y.TypeName [Y.ident "boolean" 0], 1
     | 'B' -> Y.TypeName [Y.ident "byte" 0], 1
     | 'C' -> Y.TypeName [Y.ident "char" 0], 1
+    | 'S' -> Y.TypeName [Y.ident "short" 0], 1
     | 'D' -> Y.TypeName [Y.ident "double" 0], 1
     | 'F' -> Y.TypeName [Y.ident "float" 0], 1
     | 'I' -> Y.TypeName [Y.ident "int" 0], 1
@@ -233,6 +256,7 @@ module ModelHelper = struct
 
   (* parse method jni type signature and return args Y.typ s and ret Y.typ *)
   let parse_method_sig sign =
+    print_string ("# INFO parse_method_sig: " ^ sign);
     let o = String.index sign '(' in
     let c = String.index sign ')' in
     let n = String.length sign in
@@ -286,6 +310,10 @@ module ModelHelper = struct
         | x -> x) 0]
     | x -> x
 
+  let extract_typename typ = match typ with
+    | Y.TypeName [n] -> Some n
+    | _ -> None
+
   let typename_is name typ =
     match typ with
     | Y.TypeName [n] when Y.id_string n = name -> true
@@ -311,7 +339,7 @@ module State = struct
 
   let get_native state name = List.assoc_opt name state.registered
 
-  let fold_name_of state name init cb =
+  let fold_name_of state name cb init =
     let rec f l v = match l with
       | [] -> v
       | (c, j) :: xs when c = name -> cb j v |> f xs
@@ -329,7 +357,8 @@ module ProcInfo = struct
   type t = { name: string;
              kind: kind;
              ret_type: Y.typ;
-             is_entry: bool }
+             is_entry: bool;
+             formals: Y.var list }
 
   let get_name {name} = name
 
@@ -410,14 +439,32 @@ module SimpleModel : GeneratorModel = struct
       Y.LocalVar (Y.({f_var = f_var;
                       f_init = Some (ExprInit init_val)}))
 
+  let get_this_expr proc = match ProcInfo.get_kind proc with
+    | Static _ -> Y.Literal "__JNI.ThisClass()"
+    | _ -> Y.Name [Y.ident "this" 0]
+
   let destruct_loc proc stk =
     function
       | Loc.Pointer (Loc.Explicit Loc.{name; proc = Proc p}, _, _)
           when p = ProcInfo.get_name proc ->
-        let id = if name = ProcInfo.get_arg_name_this proc
-          then "this" else name in
-        Y.Name [Y.ident id 0]
+        if name = ProcInfo.get_arg_name_this proc
+          then get_this_expr proc
+          else if List.mem_assoc name stk
+               then Y.Name [Y.ident name 0]
+               else top
       | x -> match H.simple_destruct_loc x with
+        | Y.Name [id] when not (List.mem_assoc (Y.id_string id) stk) -> top
+        | y -> y
+
+  let typed_destruct_loc proc typ stk = function
+      | Loc.Pointer (Loc.Explicit Loc.{name; proc = Proc p}, _, _)
+          when p = ProcInfo.get_name proc ->
+        if name = ProcInfo.get_arg_name_this proc
+          then get_this_expr proc
+          else if List.mem_assoc name stk
+               then Y.Name [Y.ident name 0]
+               else top
+      | x -> match H.typed_simple_destruct_loc typ x with
         | Y.Name [id] when not (List.mem_assoc (Y.id_string id) stk) -> top
         | y -> y
 
@@ -453,6 +500,17 @@ module SimpleModel : GeneratorModel = struct
         | None -> g (fun _ -> true) 0
         | Some n' -> g (fun x -> x < n') 0)
     | _ -> ()
+
+  let init_stk ProcInfo.{kind; formals} =
+    let mk name = name, JUnknown in
+    (match kind with
+      | ProcInfo.Static (env, this) -> [mk env; mk this]
+      | ProcInfo.Method (env, this) -> [mk env; mk this]
+      | _ -> [])
+    |> List.fold_right
+      (fun e s -> match e with
+         | { Y.v_name = v_name } -> mk (Y.id_string v_name) :: s)
+      formals
 
   (* update_stk: push class/method/field information into stack *)
   let update_stk state proc stk heap rloc fn args =
@@ -535,12 +593,7 @@ module SimpleModel : GeneratorModel = struct
       let ret_type = ProcInfo.get_ret_type proc in
       let v' = if H.typename_is (model_pkg_name ^ ".__Unknown") ret_type
         then top
-        else let destructed = destruct_loc proc rets v in
-             if H.typename_is "boolean" ret_type
-             then Y.Name [Y.ident (match destructed with
-                                  | Y.Literal n when not (String.equal n "0") -> "true"
-                                  | _ -> "false" ) 0]
-             else destructed in
+        else typed_destruct_loc proc ret_type rets v in
       let ret_type' = H.box_type ret_type in
       let v'' = Y.Cast (ret_type', v') in
       Some (Y.Return (Some v''))
@@ -552,7 +605,8 @@ module SimpleModel : GeneratorModel = struct
 
   (* API *)
   let method_body state proc heap logs =
-    let b, rets = List.fold_left (method_body_sub state proc) ([], []) logs in
+    let stk = init_stk proc in
+    let b, rets = List.fold_left (method_body_sub state proc) ([], stk) logs in
     let b' = match method_body_ret proc rets heap with
              | None when H.typename_is "void" (ProcInfo.get_ret_type proc) -> b
              | Some x -> x :: b

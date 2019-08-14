@@ -132,6 +132,7 @@ let parse_type typ = InferIR.Typ.(match typ with
         | IUShort -> "char"
         | IShort -> "short"
         | IInt -> "int"
+        | ILong -> "long"
         | ILongLong -> "long"
         | _ -> unknown_type_name
       in simple_type x
@@ -159,7 +160,7 @@ let parse_type typ = InferIR.Typ.(match typ with
         | "_jfloatArray" -> "float[]"
         | "_jdoubleArray" -> "double[]"
         | "_jobjectArray" -> "Object[]"
-        | _ -> unknown_type_name)
+        | _ -> "int")
     |> simple_type
   | { desc = Tptr ({ desc = Tvoid; _}, Pk_pointer); _ } ->
     simple_type "Object"
@@ -172,7 +173,7 @@ let parse_formals is_java
             Y.({v_mods = [];
                 v_type = parse_type t;
                 v_name = ident (InferIR.Mangled.to_string m) 0})) in
-  if is_java && List.length formals >= 2
+  if (*is_java &&*) List.length formals >= 2
   then
     let fs = List.tl formals in
     let is_static = is_jclass (snd (List.hd fs)) in
@@ -234,9 +235,9 @@ let solve_dependency logs =
 (* get_summary_k: get procedure's summary and pass it to the callback `cb` *)
 let get_summary_k proc default cb =
   match Summary.get proc with
-  | None -> default ()
+  | None -> default 0
   | Some s -> match s.Summary.payloads.Payloads.semantic_summary with
-    | None -> default ()
+    | None -> default 1
     | Some ss -> cb s ss
 
 let parse_body state name {heap; logs} =
@@ -286,22 +287,29 @@ let gen_compilation_units pkgclss =
       (pkg, cls, mk_compilation_unit p [Y.Class c]) :: b)
     pkgclss []
 
+let each_proc_cb' state res s ss proc is_ent procname is_java parsed = 
+  F.printf "each_proc_cb': %s\n" procname;
+  let attr = Summary.get_attributes s in
+  let ret_type = parse_type (attr.ret_type) in
+  let kind, is_static, formals = parse_formals is_java attr.formals in
+  let proc = ProcInfo.({name = procname;
+                        kind = kind;
+                        ret_type = ret_type;
+                        is_entry = is_ent;
+                        formals = formals }) in
+  let body = Y.Block (parse_body state proc ss) in
+  insert_method res parsed is_static ret_type formals body
+
 (* each_proc_cb: process for procedures *)
 let each_proc_cb state res (proc, is_ent) =
   let procname = InferIR.Typ.Procname.to_string proc in
+  F.printf "Current Proc Name: %s\n" procname;
   let is_java, parsed = parse_java_name procname in
-  get_summary_k proc (fun () -> res) (fun s ss ->
-    let attr = Summary.get_attributes s in
-    let ret_type = parse_type (attr.ret_type) in
-    let kind, is_static, formals = parse_formals is_java attr.formals in
-    let proc = ProcInfo.({name = procname;
-                          kind = kind;
-                          ret_type = ret_type;
-                          is_entry = is_ent}) in
-    let body = Y.Block (parse_body state proc ss) in
-    let res' = S.fold_name_of state procname res
-      (fun name res -> insert_method res name is_static ret_type formals body)
-    in insert_method res' parsed is_static ret_type formals body)
+  get_summary_k proc (fun x -> F.printf "Failed to get summary %d\n" x; res) (fun s ss ->
+    each_proc_cb' state res s ss proc is_ent procname is_java parsed
+    |> S.fold_name_of state procname
+      (fun name res -> 
+         each_proc_cb' state res s ss proc is_ent procname true name))
 
 (* generate: generate compilation_units from infer-out *)
 let generate () =
