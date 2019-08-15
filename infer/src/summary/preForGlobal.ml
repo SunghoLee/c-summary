@@ -172,30 +172,26 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
       pp_inst instr; *)
       let post = (
       match instr with
-      | Load (id, e1, typ, loc) -> 
-              (*exec_expr astate e1 typ false*)
-          astate
-      | Store (e1, typ, e2, loc) -> 
-          exec_expr astate e1 (Typ.mk (Tptr (typ, Pk_pointer))) instr
-          (*let astate' = exec_expr astate e1 typ false in
-          exec_expr astate' e2 typ true *)
-      | Prune (e, loc, b, i) -> astate
+      | Load (id, Lvar pvar, typ, loc) -> 
+          if Pvar.is_global pvar then
+            Domain.add pvar typ astate
+          else
+            astate
+      | Store (Lvar pvar, typ, e2, loc) -> 
+          if Pvar.is_global pvar then
+            Domain.add pvar typ astate
+          else
+            astate
+      | Store (e1, typ, Lvar pvar, loc) -> 
+          if Pvar.is_global pvar then
+            Domain.add pvar (Typ.strip_ptr typ) astate
+          else
+            astate
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) when (Typ.Procname.to_string callee_pname) = "__variable_initialization" -> 
           Caml.List.fold_left (fun i (e, t) -> exec_expr i e (Typ.mk (Tptr (t, Pk_pointer))) instr) astate args
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) -> 
           Caml.List.fold_left (fun i (e, t) -> exec_expr i e t instr) astate args
-          (*
-          if (Typ.Procname.to_string callee_pname) = "__variable_initialization" then
-            Caml.List.fold_left (fun i (e, t) -> exec_expr i e t false) astate args
-          else
-            Caml.List.fold_left (fun i (e, t) -> exec_expr i e t true) astate args*)
-          (* astate*)
-      | Call ((id, typ_e1), _, args, loc, flag) -> 
-          astate
-          (* failwith "C does not support this!" *)
-      | Nullify (pid, loc) -> astate
-      | Abstract loc -> astate
-      | ExitScope (id_list, loc) -> astate
+      | _ -> astate
               ) in
     let node_kind = CFG.Node.kind node in
     let pname = Procdesc.get_proc_name proc_data.ProcData.pdesc in

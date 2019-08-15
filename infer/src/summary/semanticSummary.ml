@@ -74,6 +74,8 @@ module TransferFunctions = struct
   module Helper = HelperFunction
   module Domain = SemanticSummaryDomain.Domain
   module Model = SemanticModels
+  module GH = GlobalHandler
+
   open SemanticSummaryDomain
 
   type extras = ProcData.no_extras
@@ -90,6 +92,11 @@ module TransferFunctions = struct
       Caml.List.map (fun (m, typ) -> ((VVar.of_string (Mangled.to_string m) ~proc:scope), typ)) args
 
   let opt_heap_every_stmt = false
+
+  let get_global_pvar_and_typ e = 
+    let glob_pvar = GH.get_glob_pvar e in
+    let all_globals = GlobalEnv.internal_get_glob_pvars () in
+    Caml.List.find (fun (pvar', typ) -> pvar' = glob_pvar) all_globals
 
   let mk_domain heap logs = 
     (*let () = L.progress "ResHeap: %a\n@." Heap.pp heap in*)
@@ -129,91 +136,77 @@ module TransferFunctions = struct
         None
 
   let rec exec_expr scope location heap (expr: Exp.t) = 
-    match expr with
-    | Var i -> 
-        let loc = Loc.of_id i ~proc:scope in
-        Heap.find loc heap
-    | UnOp (op, e, typ) ->
-        let loc = Loc.mk_implicit (Location.to_string location) in
-        Val.singleton (loc, Cst.cst_true)
-    | BinOp (op, e1, e2) -> 
-        let loc = Loc.mk_implicit (Location.to_string location) in
-        Val.singleton (loc, Cst.cst_true)
-    | Exn typ ->
-        (* do not handle exceptions *)
-        Val.empty
-    | Closure f -> 
-        failwith "C does not support anonymous functions"
-    | Const c -> 
-        (* only handle string and integer constants *)
-        (match c with
-        | Cint s -> 
-            let loc = IntLit.to_big_int s |> Loc.mk_const_of_z in
-            Val.singleton (loc, Cst.cst_true)
-        | Cfun fn ->
-            Val.singleton (Loc.mk_fun_pointer fn, Cst.cst_true)
-        | Cstr s -> 
-            let loc = Loc.mk_const_of_string s in
-            Val.singleton (loc, Cst.cst_true)
-        | Cfloat _ -> 
-            Val.empty
-        | Cclass _ -> 
-            Val.empty)
-    | Cast (typ, e) ->
-        (* TODO: need type casting? *)
-        exec_expr scope location heap e
-    | Lvar pvar -> (* Location of a variable *)
-        let loc = Loc.of_pvar ~proc:scope pvar in
-        Val.singleton (loc, Cst.cst_true)
-    | Lfield (e, fn_tn, typ) -> (* Location of a field *)
-        let field = Typ.Fieldname.to_string fn_tn |> Loc.mk_const_of_string in
-        let obj_addr_v = exec_expr scope location heap e in
-        let obj_v = Val.fold
-          (fun (obj_addr, obj_addr_cst) v -> Helper.(((Heap.find obj_addr heap) ^ obj_addr_cst) + v))
-          obj_addr_v Val.empty
-        in
-        Val.fold (fun (obj_loc, obj_cst) vals -> 
-          if not (Loc.is_const obj_loc) then
-            Val.add (Loc.mk_offset obj_loc field, obj_cst) vals
-          else vals)
-        obj_v Val.empty
-        (*Val.map (fun (obj_loc, obj_cst) -> Loc.mk_offset obj_loc field, obj_cst) obj_v*)
-    | Lindex (e1, e2) -> (* &(e1[e2]) *)
-        let index_v = exec_expr scope location heap e2 in (* value of e2 *)
-        let arr_v = exec_expr scope location heap e1 in (* address of e1 *)
-        let arr_index_pair = Helper.(arr_v * index_v) in (* all the pairs of e1 val and e2 val *)
-        Caml.List.fold_right
-          (fun ((arr_loc, arr_cst), (index_loc, index_cst)) v -> (* loc of e1[e2] *)
-            Helper.(v + Val.singleton ((Loc.mk_offset arr_loc index_loc), Cst.cst_and arr_cst index_cst)))
-          arr_index_pair Val.empty
-    | Sizeof data -> 
-        (* TODO: Calculate the size of data *)
-        Val.singleton (Loc.mk_const_of_z Z.one, Cst.cst_true)
-        (* AVS.singleton (Val.of_int (Int.top), Cst.cst_true) *)
+      match expr with
+      | Var i -> 
+          let loc = Loc.of_id i ~proc:scope in
+          Heap.find loc heap
+      | UnOp (op, e, typ) ->
+          let loc = Loc.mk_implicit (Location.to_string location) in
+          Val.singleton (loc, Cst.cst_true)
+      | BinOp (op, e1, e2) -> 
+          let loc = Loc.mk_implicit (Location.to_string location) in
+          Val.singleton (loc, Cst.cst_true)
+      | Exn typ ->
+          (* do not handle exceptions *)
+          Val.empty
+      | Closure f -> 
+          failwith "C does not support anonymous functions"
+      | Const c -> 
+          (* only handle string and integer constants *)
+          (match c with
+          | Cint s -> 
+              let loc = IntLit.to_big_int s |> Loc.mk_const_of_z in
+              Val.singleton (loc, Cst.cst_true)
+          | Cfun fn ->
+              Val.singleton (Loc.mk_fun_pointer fn, Cst.cst_true)
+          | Cstr s -> 
+              let loc = Loc.mk_const_of_string s in
+              Val.singleton (loc, Cst.cst_true)
+          | Cfloat _ -> 
+              Val.empty
+          | Cclass _ -> 
+              Val.empty)
+      | Cast (typ, e) ->
+          (* TODO: need type casting? *)
+          exec_expr scope location heap e
+      | Lvar pvar -> (* Location of a variable *)
+          let loc = Loc.of_pvar ~proc:scope pvar in
+          Val.singleton (loc, Cst.cst_true)
+      | Lfield (e, fn_tn, typ) -> (* Location of a field *)
+          let field = Typ.Fieldname.to_string fn_tn |> Loc.mk_const_of_string in
+          let obj_addr_v = exec_expr scope location heap e in
+          let obj_v = Val.fold
+            (fun (obj_addr, obj_addr_cst) v -> Helper.(((Heap.find obj_addr heap) ^ obj_addr_cst) + v))
+            obj_addr_v Val.empty
+          in
+          Val.fold (fun (obj_loc, obj_cst) vals -> 
+            if not (Loc.is_const obj_loc) then
+              Val.add (Loc.mk_offset obj_loc field, obj_cst) vals
+            else vals)
+          obj_v Val.empty
+          (*Val.map (fun (obj_loc, obj_cst) -> Loc.mk_offset obj_loc field, obj_cst) obj_v*)
+      | Lindex (e1, e2) -> (* &(e1[e2]) *)
+          let index_v = exec_expr scope location heap e2 in (* value of e2 *)
+          let arr_v = exec_expr scope location heap e1 in (* address of e1 *)
+          let arr_index_pair = Helper.(arr_v * index_v) in (* all the pairs of e1 val and e2 val *)
+          Caml.List.fold_right
+            (fun ((arr_loc, arr_cst), (index_loc, index_cst)) v -> (* loc of e1[e2] *)
+              Helper.(v + Val.singleton ((Loc.mk_offset arr_loc index_loc), Cst.cst_and arr_cst index_cst)))
+            arr_index_pair Val.empty
+      | Sizeof data -> 
+          (* TODO: Calculate the size of data *)
+          Val.singleton (Loc.mk_const_of_z Z.one, Cst.cst_true)
+          (* AVS.singleton (Val.of_int (Int.top), Cst.cst_true) *)
 
     let calc_args tenv scope location heap args =
       let heap', args_rev_v = Caml.List.fold_left
           (fun (h, vlist) ((arg: Exp.t), _) -> (
             match arg with
             | Lvar pvar when Pvar.is_global pvar (*when Pvar.is_compile_constant pvar || Pvar.is_ice pvar*) -> (
-                match Pvar.get_initializer_pname pvar with
-                | Some callee_pname -> (
-                    match Ondemand.get_proc_desc callee_pname with 
-                    | Some callee_desc -> ((* no exisiting function: because of functions Infer made *)
-                        match get_proc_summary true callee_pname with
-                        | Some ({heap=end_heap}) ->
-                            let rhs_v = Val.singleton (Loc.of_pvar pvar, Cst.cst_true) in
-                            let h' = Heap.union (fun l v1 v2 -> Some (Val.union v1 v2)) heap end_heap in
-                            h', rhs_v :: vlist
-                        | None ->
-                            (*let () = L.progress "Does not exist summary: %s\n@." (Typ.Procname.to_string callee_pname) in*)
-                            h, Val.empty :: vlist)
-                  | None ->
-                      (*let () = L.progress "Does not exist proc descriptor: %s\n@." (Typ.Procname.to_string callee_pname) in*)
-                      h, Val.empty :: vlist)
-              | None -> 
-                  (*let () = L.progress "Does not exist proc descriptor: %a\n@." (Pvar.pp Pp.text) pvar in*)
-                  h, Val.empty :: vlist)
+                let glob_addr = GH.mk_dummy_loc arg in
+                let (glob_pvar, glob_typ) = get_global_pvar_and_typ arg in
+                let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+                heap', (Val.singleton (glob_addr, Cst.cst_true)) :: vlist)
             | _ ->
                 h, exec_expr scope location heap arg :: vlist))
           (heap, []) args
@@ -239,23 +232,15 @@ module TransferFunctions = struct
       let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
       let scope = VVar.mk_scope proc_name in
       match instr with
-      | Load (id, Exp.Lvar pvar, typ, loc) when Pvar.is_global pvar -> (
-          let lhs_addr = Loc.of_id ~proc:scope id in
-          match Pvar.get_initializer_pname pvar with
-          | Some callee_pname -> (
-              match get_proc_summary true callee_pname with
-              | Some ({heap=end_heap}) ->
-                  let heap' = Heap.union (fun l v1 v2 -> Some (Val.union v1 v2)) heap end_heap in
-                  let rhs_addr = Loc.of_pvar pvar in
-                  let rhs_v = Heap.find rhs_addr heap' in (* TODO: merge global values *)
-                  let heap'' = Heap.add lhs_addr (Helper.load rhs_v heap') heap' in
-                  mk_domain heap'' logs
-              | None ->
-                  (*let () = L.progress "Does not exist summary: %s\n@." (Typ.Procname.to_string callee_pname) in*)
-                  mk_domain heap logs) 
-          | None ->
-              (*let () = L.progress "Does not exist initializer: %a\n@."  Loc.pp lhs_addr in*)
-              mk_domain heap logs)
+      | Load (id, e1, typ, loc) when GH.is_global e1 -> ( (* Handling load for global variables *)
+          let lhs_addr = Loc.of_id id ~proc:scope in
+          let glob_addr = GH.mk_dummy_loc e1 in
+          let glob_ptr_addr = Loc.mk_concrete_pointer glob_addr in
+          let (glob_pvar, glob_typ) = get_global_pvar_and_typ e1 in
+          let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+          let heap'' = Heap.add lhs_addr (Val.singleton (glob_ptr_addr, Cst.cst_true)) heap' in
+          mk_domain heap'' logs
+      )
 
       | Load (id, e1, typ, loc) when JniModel.is_jni_env_ptr_for_c typ -> 
           let lhs_addr = Loc.of_id id ~proc:scope in
@@ -278,6 +263,15 @@ module TransferFunctions = struct
           let ret_addr = Loc.mk_ret mname in
           let heap' = Heap.weak_update ret_addr rhs_v heap in
           mk_domain heap' logs
+
+      | Store (e1, typ, e2, loc) when GH.is_global e2 -> ( (* Handling load for global variables *)
+          let lhs_v = exec_expr scope loc heap e1 in
+          let glob_addr = GH.mk_dummy_loc e2 in
+          let (glob_pvar, glob_typ) = get_global_pvar_and_typ e2 in
+          let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+          let heap'' = Helper.store lhs_v (Val.singleton (glob_addr, Cst.cst_true)) heap' in
+          mk_domain heap'' logs
+      )
 
       | Store (e1 , typ, e2, loc) -> 
           let lhs_v = exec_expr scope loc heap e1 in
@@ -329,7 +323,7 @@ module TransferFunctions = struct
           (match Ondemand.get_proc_desc callee_pname with 
           | Some callee_desc -> (* no exisiting function: because of functions Infer made *)
               (match get_proc_summary true ~caller:pdesc callee_pname with
-              | Some ({ heap = end_heap; logs = end_logs }) ->
+              | Some ({ heap = end_heap; logs = end_logs }, gs) ->
                 let heap' = Heap.optimize ~scope heap in
                 let heap'', args_v = calc_args tenv scope loc heap' args in
                 let args_v' = (* Ignore variadic arguments *)
@@ -457,10 +451,13 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
           let opt_astate = Domain.optimize p ~scope:(VVar.mk_scope (Typ.Procname.to_string proc_name)) ~rm_tmp: true in
-          (*L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;*)
+          let f_heap = opt_astate.Domain.heap in
+          let gstore = GlobalHandler.collect_global_store f_heap in
+          L.progress "GLOBAL_UPDATE: %a\n@." GlobalHandler.GlobalStore.pp gstore; 
+          L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
           L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
-          {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some opt_astate}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
+          {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some (opt_astate, gstore)}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 
             summary)
     )

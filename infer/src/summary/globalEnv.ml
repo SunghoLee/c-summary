@@ -4,7 +4,7 @@ open Pervasives
 (* don't use this function outside of this module *)
 let internal_get_glob_pvars () = 
   let globals = PreForGlobal.Storage.load () in
-  PreForGlobal.NameType.fold (fun pvar typ res -> let () = L.progress "GLOBAL: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in (pvar, typ) :: res) globals []
+  PreForGlobal.NameType.fold (fun pvar typ res -> (pvar, typ) :: res) globals []
 
 let init_fun_prefix = "__infer_globals_initializer_"
 

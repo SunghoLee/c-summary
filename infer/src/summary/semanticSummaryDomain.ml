@@ -125,7 +125,7 @@ module Loc = struct
     | Explicit i -> F.fprintf fmt "EX#%a(%a)" VVar.pp i VVar.pp_var_scope i
     | Implicit i -> F.fprintf fmt "IM#%s" i
     | Const i -> F.fprintf fmt "CONST#%a" pp_const i
-    | Pointer (p, typ, _) -> F.fprintf fmt "*(%a)" pp p
+    | Pointer (p, typ, b) -> F.fprintf fmt "*(%a, %d, %b)" pp p (match typ with ConcreteLoc -> 1 | _ -> 2) b
     | FunPointer p -> F.fprintf fmt "FN#%s" (Typ.Procname.to_string p)
     | Offset (l, i) -> F.fprintf fmt "%a@%a" pp l pp i
     | Ret s -> F.fprintf fmt "RET#%s" s

@@ -85,6 +85,7 @@ let mk_ienv tenv caller_scope params args callee_heap caller_heap =
   let res = fp_mk_ienv caller_scope callee_heap heap' ienv |> InstEnv.optimize in
   let end_gettimeofday = Unix.gettimeofday () in
   (*let () = L.progress "\tDone.: %f\n@." (end_gettimeofday -. start_gettimeofday) in*)
+  let () = L.progress "IENV: %a\n@." InstEnv.pp res in
   res
 
 (* instantiate a constraint *)

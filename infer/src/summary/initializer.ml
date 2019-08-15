@@ -220,39 +220,36 @@ let init_heap ~this ~do_array loc_typs tenv heap tmap = (* loc_types: local list
 
 let init tenv pdesc =
   let scope = VVar.mk_scope (Typ.Procname.to_string (Procdesc.get_proc_name pdesc)) in
-  let globs, do_array = 
-    if GlobalEnv.is_global_var_init_fun pdesc then
-      (match GlobalEnv.get_initialized_global pdesc with
-      | Some (pvar, typ) ->
-          [VVar.of_pvar pvar, typ], true
-      | None ->
-          [], false)
-    else 
-      [], false
-  in
-  let arg_vars = (Caml.List.map
-    (fun (arg, typ) -> (VVar.of_string (Mangled.to_string arg) ~proc:scope, typ))
-    (Procdesc.get_formals pdesc)) 
-    @ (GlobalEnv.get_glob_vars ())
-  in
-  let local_vars = globs
-      (* @ Caml.List.map
-      (fun (var: ProcAttributes.var_data) -> VVar.of_string (Mangled.to_string var.name) ~proc:scope, var.typ)
-      (Procdesc.get_locals pdesc)*)
-  in
-  let locs_arg, locs_loc = 
-    (fun (var, typ) -> Loc.mk_explicit var, Typ.mk (Tptr (typ, Pk_pointer)))
-    |> (fun f -> (Caml.List.map f arg_vars, Caml.List.map f local_vars))
-  in
-  let res = 
-    if (Typ.Procname.is_constructor (Procdesc.get_proc_name pdesc)) then
-      let this_arg = Caml.List.hd (locs_arg @ locs_loc) in
-      let rest_args = Caml.List.tl (locs_arg @ locs_loc) in
-      let tmap = mk_tmap (Caml.List.tl locs_arg) tenv TypMap.empty in
-      init_heap ~this:false ~do_array rest_args tenv (init_heap ~this:true ~do_array [this_arg] tenv Heap.empty tmap) tmap
-    else
-      let tmap = mk_tmap locs_arg tenv TypMap.empty in
-      init_heap ~this:false ~do_array (locs_arg @ locs_loc) tenv Heap.empty tmap
-  in
-  (*let () = L.progress "#INIT: %a\n@." Heap.pp res in*)
-  res
+  if GlobalEnv.is_global_var_init_fun pdesc then
+    (match GlobalEnv.get_initialized_global pdesc with
+    | Some (pvar, typ) ->
+        GlobalHandler.inject_dummy_mappings tenv pvar typ Heap.empty
+    | None ->
+        Heap.empty)
+  else 
+    let arg_vars = (Caml.List.map
+      (fun (arg, typ) -> (VVar.of_string (Mangled.to_string arg) ~proc:scope, typ))
+      (Procdesc.get_formals pdesc)) 
+      @ (GlobalEnv.get_glob_vars ())
+    in
+    let local_vars = [](*globs*)
+        (* @ Caml.List.map
+        (fun (var: ProcAttributes.var_data) -> VVar.of_string (Mangled.to_string var.name) ~proc:scope, var.typ)
+        (Procdesc.get_locals pdesc)*)
+    in
+    let locs_arg, locs_loc = 
+      (fun (var, typ) -> Loc.mk_explicit var, Typ.mk (Tptr (typ, Pk_pointer)))
+      |> (fun f -> (Caml.List.map f arg_vars, Caml.List.map f local_vars))
+    in
+    let res = 
+      if (Typ.Procname.is_constructor (Procdesc.get_proc_name pdesc)) then
+        let this_arg = Caml.List.hd (locs_arg @ locs_loc) in
+        let rest_args = Caml.List.tl (locs_arg @ locs_loc) in
+        let tmap = mk_tmap (Caml.List.tl locs_arg) tenv TypMap.empty in
+        init_heap ~this:false ~do_array:false rest_args tenv (init_heap ~this:true ~do_array:false [this_arg] tenv Heap.empty tmap) tmap
+      else
+        let tmap = mk_tmap locs_arg tenv TypMap.empty in
+        init_heap ~this:false ~do_array:false (locs_arg @ locs_loc) tenv Heap.empty tmap
+    in
+    let () = L.progress "#INIT: %a\n@." Heap.pp res in
+    res

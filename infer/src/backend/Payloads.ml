@@ -21,7 +21,7 @@ type t =
   ; quandary: QuandarySummary.t option
   ; racerd: RacerDDomain.summary option
   ; pointer_preanalysis: PointerPreanalysisDomain.t option
-  ; semantic_summary: SemanticSummaryDomain.t option
+  ; semantic_summary: (SemanticSummaryDomain.t * GlobalHandler.GlobalStore.t) option
   ; siof: SiofDomain.Summary.t option
   ; starvation: StarvationDomain.summary option
   ; typestate: TypeState.t option
@@ -66,7 +66,7 @@ let pp pe fmt
     racerd (pp_opt "Litho" LithoDomain.pp) litho
     (pp_opt "PointerAnalysis" PointerPreanalysisDomain.pp)
     pointer_preanalysis
-    (pp_opt "SemanticSummary" SemanticSummaryDomain.pp)
+    (pp_opt "SemanticSummary" GlobalHandler.whole_pp)
     semantic_summary 
     (pp_opt "BufferOverrun" BufferOverrunSummary.pp)
     buffer_overrun
