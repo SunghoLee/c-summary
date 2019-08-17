@@ -201,7 +201,7 @@ let init_heap ~this ~do_array loc_typs tenv heap tmap = (* loc_types: local list
           heap)
       | Tarray {elt; length = Some i} -> (* fixed size arrays *)
           if do_array then
-            let loc' = Loc.unwrap_ptr addr in (* C allocates array location directly to variable address *)
+            let loc' = addr in (*Loc.unwrap_ptr addr in*) (* C allocates array location directly to variable address *)
             let index = (IntLit.to_int_exn i) - 1 in
             let rec mk_array i heap = 
               if i = -1 then heap

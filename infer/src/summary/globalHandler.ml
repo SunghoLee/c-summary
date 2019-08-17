@@ -31,6 +31,7 @@ let rec is_global_loc (loc: Loc.t) =
   | Ret _ ->
       false
 
+      (*
 let rec mk_dummy_loc (expr: Exp.t) = 
   match expr with
   | Lvar pvar -> 
@@ -44,6 +45,7 @@ let rec mk_dummy_loc (expr: Exp.t) =
       Loc.mk_implicit "GB"
   | _ -> 
       failwith (F.asprintf "It does not a global variable: %a" Exp.pp expr)
+      *)
 
 let rec get_glob_pvar (expr: Exp.t) =
   match expr with
@@ -57,30 +59,33 @@ let rec get_glob_pvar (expr: Exp.t) =
       failwith (F.asprintf "It does not a global variable: %a" Exp.pp expr)
 
 let rec mk_dummy_heap tenv visited heap (addr, typ) = 
-  let desc = typ.Typ.desc in
-  let visited' = TypSet.add typ visited in
-  match desc with
-  | Tptr (ptr_typ, kind) ->
-      let ptr_loc = Loc.mk_concrete_pointer addr in
-      let heap' = Heap.add addr (Val.singleton (ptr_loc, Cst.cst_true)) heap in
-      mk_dummy_heap tenv visited' heap' (ptr_loc, ptr_typ)
-  | Tstruct name -> (
-      HelperFunction.get_fld_and_typs name tenv
-      |> Caml.List.fold_left
-          (fun heap (field, typ) ->
-            mk_dummy_heap tenv visited' heap (Loc.mk_offset addr (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap )
-  | Tarray {elt; length = Some i} -> (* fixed size arrays *)
-      let loc' = Loc.unwrap_ptr addr in (* C allocates array location directly to variable address *)
-      let index = (IntLit.to_int_exn i) - 1 in
-      let rec mk_array i heap = 
-        if i = -1 then heap
-        else
-          mk_dummy_heap tenv visited heap (Loc.mk_offset loc' (Loc.mk_const_of_z (Z.of_int i)), (Typ.mk (Tptr (elt, Pk_pointer)))) 
-          |> mk_array (i - 1)
-      in
-      mk_array index heap
-  | _ -> 
-      heap
+  if Heap.mem addr heap then
+    heap
+  else
+    let desc = typ.Typ.desc in
+    let visited' = TypSet.add typ visited in
+    match desc with
+    | Tptr (ptr_typ, kind) ->
+        let ptr_loc = Loc.mk_concrete_pointer addr in
+        let heap' = Heap.add addr (Val.singleton (ptr_loc, Cst.cst_true)) heap in
+        mk_dummy_heap tenv visited' heap' (ptr_loc, ptr_typ)
+    | Tstruct name -> (
+        HelperFunction.get_fld_and_typs name tenv
+        |> Caml.List.fold_left
+            (fun heap (field, typ) ->
+              mk_dummy_heap tenv visited' heap (Loc.mk_offset addr (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap )
+    | Tarray {elt; length = Some i} -> (* fixed size arrays *)
+        let loc' = addr in(*Loc.unwrap_ptr addr in*) (* C allocates array location directly to variable address *)
+        let index = (IntLit.to_int_exn i) - 1 in
+        let rec mk_array i heap = 
+          if i = -1 then heap
+          else
+            mk_dummy_heap tenv visited heap (Loc.mk_offset loc' (Loc.mk_const_of_z (Z.of_int i)), (Typ.mk (Tptr (elt, Pk_pointer)))) 
+            |> mk_array (i - 1)
+        in
+        mk_array index heap
+    | _ -> 
+        heap
 
 
 let inject_dummy_mappings tenv pvar typ heap =

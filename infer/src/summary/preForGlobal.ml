@@ -22,6 +22,7 @@ module NameType = struct
       | Tarray _,  Tptr _ -> -1
       | Tptr _,  Tarray _ -> 1
       | Tptr (base1, _), Tptr (base2, _) -> impl base1 base2
+      | Tarray {length=length1}, Tarray {length=length2} -> if length1 > length2 then -1 else 1
       | Tarray _, _ -> -1
       | _, Tarray _ -> 1
       | Tvoid, _ -> 1
@@ -168,8 +169,8 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
                   m
 
   let exec_instr astate proc_data node (instr: Sil.instr) =
-      (*L.progress "PRE: %s\n@." (Domain.pp_m astate);
-      pp_inst instr; *)
+      (*L.progress "PRE: %s\n@." (Domain.pp_m astate);*)
+      pp_inst instr; 
       let post = (
       match instr with
       | Load (id, Lvar pvar, typ, loc) -> 
@@ -177,16 +178,33 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
             Domain.add pvar typ astate
           else
             astate
+
+      | Load (id, Lindex (Lvar pvar, Const (Cint s)), typ, loc) -> 
+          if Pvar.is_global pvar then
+            let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
+            Domain.add pvar typ' astate
+          else
+            astate
+
       | Store (Lvar pvar, typ, e2, loc) -> 
           if Pvar.is_global pvar then
             Domain.add pvar typ astate
           else
             astate
+
+      | Store (Lindex (Lvar pvar, Const (Cint s)), typ, e2, loc) -> 
+          if Pvar.is_global pvar then
+            let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
+            Domain.add pvar typ' astate
+          else
+            astate
+
       | Store (e1, typ, Lvar pvar, loc) -> 
           if Pvar.is_global pvar then
             Domain.add pvar (Typ.strip_ptr typ) astate
           else
             astate
+
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) when (Typ.Procname.to_string callee_pname) = "__variable_initialization" -> 
           Caml.List.fold_left (fun i (e, t) -> exec_expr i e (Typ.mk (Tptr (t, Pk_pointer))) instr) astate args
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) -> 
