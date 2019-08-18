@@ -58,6 +58,16 @@ let rec get_glob_pvar (expr: Exp.t) =
   | _ -> 
       failwith (F.asprintf "It does not a global variable: %a" Exp.pp expr)
 
+let rec get_glob_pvar_opt (expr: Exp.t) =
+  match expr with
+  | Lvar pvar -> 
+      Some pvar
+  | Lfield (e, fn_tn, typ) -> 
+      get_glob_pvar_opt e
+  | Lindex (e1, e2) -> 
+      get_glob_pvar_opt e1
+  | _ -> None
+
 let rec mk_dummy_heap tenv visited heap (addr, typ) = 
   if Heap.mem addr heap then
     heap

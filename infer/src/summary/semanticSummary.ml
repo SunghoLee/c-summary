@@ -98,6 +98,13 @@ module TransferFunctions = struct
     let all_globals = GlobalEnv.internal_get_glob_pvars () in
     Caml.List.find (fun (pvar', typ) -> pvar' = glob_pvar) all_globals
 
+  let get_global_pvar_and_typ_opt e =
+    match GH.get_glob_pvar_opt e with
+    | None -> None
+    | Some glob_pvar ->
+      let all_globals = GlobalEnv.internal_get_glob_pvars () in
+      Caml.List.find_opt (fun (pvar', typ) -> pvar' = glob_pvar) all_globals
+
   let mk_domain heap logs = 
     (*let () = L.progress "ResHeap: %a\n@." Heap.pp heap in*)
     if opt_heap_every_stmt then
@@ -207,8 +214,11 @@ module TransferFunctions = struct
           (fun (h, vlist) ((arg: Exp.t), _) -> (
             match arg with
             | Lvar pvar when Pvar.is_global pvar (*when Pvar.is_compile_constant pvar || Pvar.is_ice pvar*) -> (
-                let (glob_pvar, glob_typ) = get_global_pvar_and_typ arg in
-                let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+                (*let (glob_pvar, glob_typ) = get_global_pvar_and_typ arg in
+                let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in*)
+                let heap' = match get_global_pvar_and_typ_opt arg with
+                  | Some (glob_pvar, glob_typ) -> GH.inject_dummy_mappings tenv glob_pvar glob_typ heap 
+                  | None -> heap in
                 let glob_addr = exec_expr scope location heap' arg in
                 heap', (glob_addr :: vlist))
             | _ ->
@@ -238,8 +248,11 @@ module TransferFunctions = struct
       match instr with
       | Load (id, e1, typ, loc) when GH.is_global e1 -> ( (* Handling load for global variables *)
           let lhs_addr = Loc.of_id id ~proc:scope in
-          let (glob_pvar, glob_typ) = get_global_pvar_and_typ e1 in
-          let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+          (*let (glob_pvar, glob_typ) = get_global_pvar_and_typ e1 in
+          let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in*)
+          let heap' = match get_global_pvar_and_typ_opt e1 with
+            | Some (glob_pvar, glob_typ) -> GH.inject_dummy_mappings tenv glob_pvar glob_typ heap 
+            | None -> heap in
           let glob_v = exec_expr scope loc heap' e1 |> (fun x -> Helper.load x heap') in
           let heap'' = Heap.add lhs_addr glob_v heap' in
           mk_domain heap'' logs
@@ -268,8 +281,11 @@ module TransferFunctions = struct
           mk_domain heap' logs
 
       | Store (e1, typ, e2, loc) when GH.is_global e2 -> ( (* Handling load for global variables *)
-          let (glob_pvar, glob_typ) = get_global_pvar_and_typ e2 in
-          let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+          (*let (glob_pvar, glob_typ) = get_global_pvar_and_typ e2 in
+          let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in*)
+          let heap' = match get_global_pvar_and_typ_opt e2 with
+            | Some (glob_pvar, glob_typ) -> GH.inject_dummy_mappings tenv glob_pvar glob_typ heap 
+            | None -> heap in
           let lhs_v = exec_expr scope loc heap' e1 in
           let rhs_v = exec_expr scope loc heap' e2 in
           let heap'' = Helper.store lhs_v rhs_v heap' in
@@ -278,8 +294,11 @@ module TransferFunctions = struct
       )
 
       | Store (e1, typ, e2, loc) when GH.is_global e1 -> ( (* Handling load for global variables *)
-          let (glob_pvar, glob_typ) = get_global_pvar_and_typ e1 in
-          let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+          (*let (glob_pvar, glob_typ) = get_global_pvar_and_typ e1 in
+          let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in*)
+          let heap' = match get_global_pvar_and_typ_opt e1 with
+            | Some (glob_pvar, glob_typ) -> GH.inject_dummy_mappings tenv glob_pvar glob_typ heap 
+            | None -> heap in
           let lhs_v = exec_expr scope loc heap' e1 in
           let rhs_v = exec_expr scope loc heap' e2 in
           let heap'' = Helper.store lhs_v rhs_v heap' in
