@@ -175,14 +175,12 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
       match instr with
       | Load (id, Lvar pvar, typ, loc) -> 
           if Pvar.is_global pvar then
-            let () = L.progress "\tGlobal: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
             Domain.add pvar typ astate
           else
             astate
 
       | Load (id, Lindex (Lvar pvar, Const (Cint s)), typ, loc) -> 
           if Pvar.is_global pvar then
-            let () = L.progress "\tGlobal: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
             let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
             Domain.add pvar typ' astate
           else
@@ -190,14 +188,12 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
 
       | Store (Lvar pvar, typ, e2, loc) -> 
           if Pvar.is_global pvar then
-            let () = L.progress "\tGlobal: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
             Domain.add pvar typ astate
           else
             astate
 
       | Store (Lindex (Lvar pvar, Const (Cint s)), typ, e2, loc) -> 
           if Pvar.is_global pvar then
-            let () = L.progress "\tGlobal: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
             let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
             Domain.add pvar typ' astate
           else
@@ -205,7 +201,6 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
 
       | Store (e1, typ, Lvar pvar, loc) -> 
           if Pvar.is_global pvar then
-            let () = L.progress "\tGlobal: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
             Domain.add pvar (Typ.strip_ptr typ) astate
           else
             astate
