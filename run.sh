@@ -1,6 +1,8 @@
 #!/bin/bash
 
-INFER=/home/eshaj/Documents/repo/c-summary/infer/bin/infer
+INFER_DIR=/home/eshaj/Documents/repo/c-summary/infer
+INFER=$INFER_DIR/bin/infer
+POST_GLOBAL=$INFER_DIR/src/_build/opt/PostGlobal.exe
 ANDROID_NDK=/home/eshaj/Documents/repo/android_ndks/r18b
 ANDROID_NDK_USR=$ANDROID_NDK/sysroot/usr/include
 ANDROID_NDK_GLUE=$ANDROID_NDK/sources/android/native_app_glue
@@ -36,4 +38,6 @@ echo "Performing preanalysis for the global environment..."
   $INFER analyze -P --ssp-only
 echo "Generating semantic summary for $files..."
   $INFER analyze -P --ss-only
+echo "Post-processing for Global variables..."
+  $POST_GLOBAL
 rm *.dat &> /dev/null
