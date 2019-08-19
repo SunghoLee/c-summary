@@ -10,114 +10,7 @@ open Core
 module F = Format
 module L = Logging
 
-module NameType = struct
-  include PrettyPrintable.MakePPMonoMap(struct include Pvar let pp = pp Pp.text end)(struct include Typ let pp = pp_full Pp.text end)
-
-  let debug = ref false
-
-  let choose_most_specific_one typ1 typ2 =
-    (* 1 means that the second one is more specific than the first, and -1 means the opposite way. *)
-    let rec impl typ1 typ2 =
-      match typ1.Typ.desc, typ2.Typ.desc with
-      | Tarray _,  Tptr _ -> -1
-      | Tptr _,  Tarray _ -> 1
-      | Tptr (base1, _), Tptr (base2, _) -> impl base1 base2
-      | Tarray {length=length1}, Tarray {length=length2} -> if length1 > length2 then -1 else 1
-      | Tarray _, _ -> -1
-      | _, Tarray _ -> 1
-      | Tvoid, _ -> 1
-      | _, Tvoid -> -1
-      | _ -> 
-          if typ1.Typ.desc = typ2.Typ.desc then
-            1
-          else
-            failwith (F.asprintf "Not compatible types: %a <> %a" (Typ.pp_full Pp.text) typ1 (Typ.pp_full Pp.text) typ2)
-      (*
-      | Tint of ikind  (** integer type *)
-      | Tfloat of fkind  (** float type *)
-      | Tvoid  (** void type *)
-      | Tfun of {no_return: bool}  (** function type with noreturn attribute *)
-      | Tptr of t * ptr_kind  (** pointer type *)
-      | Tstruct of name  (** structured value type name *)
-      | TVar of string  (** type variable (ie. C++ template variables) *)
-      | Tarray of {elt: t; length: IntLit.t option; stride: IntLit.t option}*)
-    in
-    if (impl typ1 typ2) > 0 then typ2
-    else typ1
-
-  let ( <= ) ~lhs ~rhs = 
-    (fun var typ ->
-      mem var rhs && (find var lhs) = (find var rhs))
-    |> (fun x -> for_all x lhs)
-
-  let rec equal_template_arg (arg1: Typ.template_arg) (arg2: Typ.template_arg) =
-    match arg1, arg2 with
-    | TType t1, TType t2 -> equal_typs t1 t2
-    | TInt i1, TInt i2 -> i1 = i2
-    | TNull, TNull | TNullPtr, TNullPtr | TOpaque, TOpaque -> true
-    | _ -> false
-        
-  and equal_template_args arg1 arg2 =
-    match arg1, arg2 with
-    | [], [] -> true
-    | h1 :: t1, h2 :: t2 -> (equal_template_arg h1 h2) && (equal_template_args t1 t2)
-    | _ -> false
-
-  and equal_template_spec (sp1: Typ.template_spec_info) (sp2: Typ.template_spec_info) =
-    match sp1, sp2 with
-    | NoTemplate, NoTemplate -> true
-    | Template {mangled = m1; args = a1}, Template {mangled = m2; args = a2} -> (
-      match m1, m2 with
-      | None, None -> true
-      | Some s1, Some s2 when s1 = s2 -> 
-          equal_template_args a1 a2
-      | _ ->
-          false)
-    | _ -> false
-
-  and equal_quals q1 q2 =
-    (QualifiedCppName.to_qual_string q1) = (QualifiedCppName.to_qual_string q2)
-
-  and equal_str_name (n1: Typ.name) (n2: Typ.name) =
-    match n1, n2 with
-    | CStruct qcn1, CStruct qcn2 -> equal_quals qcn1 qcn2
-    | CUnion qcn1, CUnion qcn2 -> equal_quals qcn1 qcn2
-    | CppClass (qcn1, spec1), CppClass (qcn2, spec2) -> 
-        (equal_quals qcn1 qcn2) && (equal_template_spec spec1 spec2)
-    | _ -> false
-
-  and equal_typs (typ1: Typ.t) (typ2: Typ.t) = 
-    match typ1.desc, typ2.desc with
-    | Tstruct n1, Tstruct n2 -> equal_str_name n1 n2
-    | Tint i1, Tint i2 -> i1 = i2
-    | Tfloat f1, Tfloat f2 -> f1 = f2
-    | Tvoid, Tvoid -> true
-    | Tfun {no_return = r1}, Tfun {no_return = r2} -> r1 = r2
-    | Tptr (b1, _), Tptr (b2, _) -> equal_typs b1 b2
-    | TVar s1, TVar s2 -> s1 = s2
-    | Tarray {elt = e1; length = l1; stride = s1}, Tarray {elt = e2; length = l2; stride = s2} -> 
-        (e1 = e2) && (l1 = l2) && (s1 = s2)
-    | _ -> false
-
-  let join lhs rhs = 
-    (fun var typ1 typ2 ->
-      if equal_typs typ1 typ2 then
-        Some typ1
-      else
-        ((*L.progress "\t\tProcessing: %a\n@." (Pvar.pp Pp.text) var *)
-        Some (choose_most_specific_one typ1 typ2))
-        )
-    |> (fun x -> union x lhs rhs)
-
-  let widen ~prev ~next ~num_iters = join prev next
-
-  let add pvar typ m =
-    if mem pvar m then
-      let pre_typ = find pvar m in
-      add pvar (choose_most_specific_one typ pre_typ) m
-    else
-      add pvar typ m
-end
+module NameType = GlobalNameType
 
 module TransferFunctions (CFG : ProcCfg.S) = struct
   module CFG = CFG
@@ -147,10 +40,34 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
     | Abstract _ -> "Abstract"
     | ExitScope _ -> "ExitScope"
 
-  let pp_inst (i: Sil.instr) = 
-    L.progress "[%s] %a\n@." (get_inst_type i) (Sil.pp_instr ~print_types:true Pp.text) i 
+  let pp_inst proc_data (i: Sil.instr) = 
+    let proc_name_str = Typ.Procname.to_string (Procdesc.get_proc_name proc_data.ProcData.pdesc) in
+    L.progress "%s: [%s] %a\n@." proc_name_str (get_inst_type i) (Sil.pp_instr ~print_types:true Pp.text) i 
 
-  let exec_expr m (expr : Exp.t) t instr : Domain.t =
+  let rec handle_arr (arr: Exp.t) (i: Exp.t) typ = 
+    match arr,i with
+    | Lvar pvar, Const (Cint s) ->
+        if Pvar.is_global pvar then
+          let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
+          Some (pvar, typ')
+        else
+          None
+
+    | Lindex (arr', i'), Const (Cint s)  -> (
+        match handle_arr arr' i' typ with
+        | Some (p, t) ->
+            Some(p, Typ.mk_array ~length:(IntLit.add s IntLit.one) t)
+        | _ ->
+            None
+    )
+
+    | _, Const (Cint s) ->
+        None
+
+    | _ -> 
+        None
+
+  let exec_expr m (expr : Exp.t) t : Domain.t =
       match expr with
       | Var i -> m
       | UnOp (op, e, typ) -> m
@@ -160,55 +77,73 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
       | Const c -> m
       | Cast (typ, e) -> m
       | Lfield (e, fn, typ) -> m
-      | Lindex (e1, e2) -> m
+      | Lindex (e1, e2) -> (
+        match handle_arr e1 e2 t with
+        | Some (p, t') -> 
+            let () = L.progress "G: %a : %a\n@." (Pvar.pp Pp.text) p (Typ.pp_full Pp.text) t' in
+            Domain.add p t' m
+        | None ->
+            m)
       | Sizeof data -> m
       | Lvar pvar -> 
               if Pvar.is_global pvar then
-                  Domain.add pvar (Typ.strip_ptr t) m
+                let () = L.progress "G: %a : %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) t in
+                  Domain.add pvar t m
               else 
                   m
 
+  let handle_global (e: Exp.t) typ astate =
+    match e with
+    | Lvar pvar -> 
+        if Pvar.is_global pvar then
+          let () = L.progress "G: %a : %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
+          Domain.add pvar typ astate
+        else
+          astate
+    | Lindex (arr, i) -> (
+        match handle_arr arr i typ with
+        | Some (p, t) ->
+            let () = L.progress "G: %a : %a\n@." (Pvar.pp Pp.text) p (Typ.pp_full Pp.text) t in
+            Domain.add p t astate
+        | _ ->
+            astate
+        )
+    | _ -> astate
+
   let exec_instr astate proc_data node (instr: Sil.instr) =
       (*L.progress "PRE: %s\n@." (Domain.pp_m astate);*)
-      pp_inst instr; 
+      pp_inst proc_data instr; 
       let post = (
       match instr with
-      | Load (id, Lvar pvar, typ, loc) -> 
-          if Pvar.is_global pvar then
-            Domain.add pvar typ astate
-          else
-            astate
+      | Load (id, e1, typ, loc) -> 
+          handle_global e1 typ astate
 
-      | Load (id, Lindex (Lvar pvar, Const (Cint s)), typ, loc) -> 
-          if Pvar.is_global pvar then
-            let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
-            Domain.add pvar typ' astate
-          else
-            astate
+      | Store (e1, typ, e2, loc) -> 
+          let astate' = handle_global e1 typ astate in
+          if Typ.is_pointer typ then
+            handle_global e2 (Typ.strip_ptr typ) astate'
+          else 
+            astate'
 
-      | Store (Lvar pvar, typ, e2, loc) -> 
-          if Pvar.is_global pvar then
-            Domain.add pvar typ astate
-          else
-            astate
+      (* Calling an initializer function behaves quite differently from normal functions. The argument type is not deterministic. *)
+      | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) when String.is_prefix (Typ.Procname.to_string callee_pname) ~prefix:"__variable_initialization" ->
+          astate
+          (*
+          let _ = Caml.List.iter (fun (e, t) -> L.progress "INIT ARG: %a:%a\n@." Exp.pp e (Typ.pp_full Pp.text) t) args in
+          Caml.List.fold_left (fun i (e, t) -> exec_expr i e (Typ.mk (Tptr (t, Pk_pointer)))) astate args*)
 
-      | Store (Lindex (Lvar pvar, Const (Cint s)), typ, e2, loc) -> 
-          if Pvar.is_global pvar then
-            let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
-            Domain.add pvar typ' astate
-          else
-            astate
-
-      | Store (e1, typ, Lvar pvar, loc) -> 
-          if Pvar.is_global pvar then
-            Domain.add pvar (Typ.strip_ptr typ) astate
-          else
-            astate
-
-      | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) when (Typ.Procname.to_string callee_pname) = "__variable_initialization" -> 
-          Caml.List.fold_left (fun i (e, t) -> exec_expr i e (Typ.mk (Tptr (t, Pk_pointer))) instr) astate args
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) -> 
-          Caml.List.fold_left (fun i (e, t) -> exec_expr i e t instr) astate args
+          let _ = Caml.List.iter (fun (e, t) -> L.progress "ARG: %a:%a\n@." Exp.pp e (Typ.pp_full Pp.text) t) args in
+          let _ = L.progress "CALLLE: %s\n@." (Typ.Procname.to_string callee_pname) in
+          (if (Typ.Procname.to_string callee_pname) = "speex_bits_init" then
+          Caml.List.iter (fun (e, t) -> L.progress "SPEEX ARG: %a:%a\n@." Exp.pp e (Typ.pp_full Pp.text) t) args
+          );
+          Caml.List.fold_left (fun i (e, t) -> 
+            if Typ.is_pointer t then
+              handle_global e (Typ.strip_ptr t) i
+            else 
+              i) astate args
+
       | _ -> astate
               ) in
     let node_kind = CFG.Node.kind node in
@@ -220,8 +155,6 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
 end
 
 module Analyzer = AbstractInterpreter.MakeRPO (TransferFunctions (ProcCfg.Exceptional))
-
-let summ = ref NameType.empty
 
 module Procs : sig
     type typ
@@ -252,10 +185,8 @@ end = struct
       Pervasives.close_in ic; res
 
     let store a = 
-      let tn = try load () with _ -> NameType.empty in
-      let tn' = NameType.join a tn in
       let oc = Pervasives.open_out glob_env in
-      Marshal.to_channel oc tn' [];
+      Marshal.to_channel oc a [];
       Pervasives.close_out oc
 
     let store_fun a = 
@@ -270,17 +201,21 @@ end = struct
 end
 
 let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
-    let proc_name = Procdesc.get_proc_name proc_desc in
-    (
-        procs := Procs.add proc_name proc_desc !procs;
-        Storage.store_fun !procs
-    );
-    let merge node_id state = 
-        let post = state.AbstractInterpreter.State.post in
-        summ := NameType.union (fun x y z -> Some y) post !summ
-    in 
+    let proc_data = ProcData.make_default proc_desc tenv in 
     let proc_name_str = Typ.Procname.to_string (Procdesc.get_proc_name proc_desc) in
-    let inv_map = Analyzer.exec_pdesc (ProcData.make_default proc_desc tenv) ~initial:(!summ) in
-    Analyzer.InvariantMap.iter merge inv_map;
+    match Analyzer.compute_post proc_data ~initial:NameType.empty with
+      | Some p -> 
+          let _ = L.progress "Proc: %s\nFINAL: %a\n" proc_name_str NameType.pp p in
+          (*Storage.store p;*)
+          let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
+          {summary with Summary.payloads = { summary.Summary.payloads with Payloads.global_preanalysis = Some p}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
+      | None ->
+          summary
+            (*
+    let inv_map = Analyzer.exec_pdesc (ProcData.make_default proc_desc tenv) ~initial:NameType.empty in
+    let post = inv_map.AbstractInterpreter.State.post in 
+    Storage.store post;
+    summary*)
+    (*Analyzer.InvariantMap.iter merge inv_map;
     Storage.store !summ;
-    summary
+    summary*)

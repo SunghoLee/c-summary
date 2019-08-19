@@ -96,7 +96,12 @@ module TransferFunctions = struct
   let get_global_pvar_and_typ e = 
     let glob_pvar = GH.get_glob_pvar e in
     let all_globals = GlobalEnv.internal_get_glob_pvars () in
-    Caml.List.find (fun (pvar', typ) -> pvar' = glob_pvar) all_globals
+    try Caml.List.find (fun (pvar', typ) -> pvar' = glob_pvar) all_globals with _ ->
+      try Caml.List.find (fun (pvar', typ) -> Mangled.equal (Pvar.get_name pvar') (Pvar.get_name glob_pvar)) all_globals with _ ->
+        let _ = L.progress "#### NOTFOUND!! \n #### PVAR: %a \n@." (Pvar.pp Pp.text) glob_pvar in
+        let _ = Caml.List.iter (fun (p, t) -> L.progress "### G: %a: %a\n@." (Pvar.pp Pp.text) p (Typ.pp_full Pp.text) t) all_globals in
+        failwith (F.asprintf "TTTTTTTTTTTTTTTTTTTTTTTTTTT: %a" (Pvar.pp Pp.text) glob_pvar)
+
 
   (*let get_global_pvar_and_typ_opt e =
     match GH.get_glob_pvar_opt e with
@@ -459,6 +464,7 @@ module TransferFunctions = struct
 end
 
 module Analyzer = AbstractInterpreter.MakeWTO (TransferFunctions)
+
 
 (* module Initializer = struct ... end was moved to 'initializer.ml' *)
 let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =

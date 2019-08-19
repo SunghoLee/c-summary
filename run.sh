@@ -2,6 +2,7 @@
 
 INFER_DIR=/home/eshaj/Documents/repo/c-summary/infer
 INFER=$INFER_DIR/bin/infer
+GLOBAL_COLLECTOR=$INFER_DIR/src/_build/opt/GlobalCollector.exe
 POST_GLOBAL=$INFER_DIR/src/_build/opt/PostGlobal.exe
 ANDROID_NDK=/home/eshaj/Documents/repo/android_ndks/r18b
 ANDROID_NDK_USR=$ANDROID_NDK/sysroot/usr/include
@@ -36,8 +37,9 @@ echo "Performing preanalysis for alias relations..."
 rm targets.dat &> /dev/null
 echo "Performing preanalysis for the global environment..."
   $INFER analyze -P --ssp-only
+  $GLOBAL_COLLECTOR
 echo "Generating semantic summary for $files..."
   $INFER analyze -P --ss-only
 echo "Post-processing for Global variables..."
   $POST_GLOBAL
-rm *.dat &> /dev/null
+#rm *.dat &> /dev/null

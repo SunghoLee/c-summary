@@ -21,6 +21,7 @@ type t =
   ; quandary: QuandarySummary.t option
   ; racerd: RacerDDomain.summary option
   ; pointer_preanalysis: PointerPreanalysisDomain.t option
+  ; global_preanalysis: GlobalNameType.t option
   ; semantic_summary: (SemanticSummaryDomain.t * GlobalHandler.GlobalStore.t) option
   ; siof: SiofDomain.Summary.t option
   ; starvation: StarvationDomain.summary option
@@ -40,6 +41,7 @@ let pp pe fmt
     ; quandary
     ; racerd
     ; pointer_preanalysis
+    ; global_preanalysis
     ; semantic_summary
     ; siof
     ; starvation
@@ -51,7 +53,7 @@ let pp pe fmt
     | None ->
         ()
   in
-  F.fprintf fmt "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a@\n"
+  F.fprintf fmt "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a@\n"
     (pp_opt "Biabduction" (BiabductionSummary.pp pe))
     biabduction (pp_opt "TypeState" TypeState.pp) typestate
     (pp_opt "ClassLoads" ClassLoadsDomain.pp_summary)
@@ -66,6 +68,8 @@ let pp pe fmt
     racerd (pp_opt "Litho" LithoDomain.pp) litho
     (pp_opt "PointerAnalysis" PointerPreanalysisDomain.pp)
     pointer_preanalysis
+    (pp_opt "GlobalVarTypeAnalysis" GlobalNameType.pp)
+    global_preanalysis 
     (pp_opt "SemanticSummary" GlobalHandler.whole_pp)
     semantic_summary 
     (pp_opt "BufferOverrun" BufferOverrunSummary.pp)
@@ -96,6 +100,7 @@ let empty =
   ; quandary= None
   ; racerd= None
   ; pointer_preanalysis = None
+  ; global_preanalysis = None
   ; semantic_summary= None
   ; lab_resource_leaks= None
   ; siof= None

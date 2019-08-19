@@ -21,6 +21,7 @@ type t =
   ; quandary: QuandarySummary.t option
   ; racerd: RacerDDomain.summary option
   ; pointer_preanalysis: PointerPreanalysisDomain.t option
+  ; global_preanalysis: GlobalNameType.t option
   ; semantic_summary: (SemanticSummaryDomain.t * GlobalHandler.GlobalStore.t) option
   ; siof: SiofDomain.Summary.t option
   ; starvation: StarvationDomain.summary option

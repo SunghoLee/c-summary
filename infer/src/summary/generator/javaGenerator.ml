@@ -344,7 +344,8 @@ let load_glocs () =
     Pervasives.close_in ic;
     F.printf "glocs = %a\n" LocSet.pp res;
     res
-  with _ ->
+  with e ->
+    let _ = Printf.eprintf "errorerror: %s\n" (Printexc.to_string e) in
     LocSet.empty
 
 (* generate: generate compilation_units from infer-out *)
