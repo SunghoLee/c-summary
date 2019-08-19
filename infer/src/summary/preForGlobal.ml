@@ -175,12 +175,14 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
       match instr with
       | Load (id, Lvar pvar, typ, loc) -> 
           if Pvar.is_global pvar then
+            let () = L.progress "\tGlobal: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
             Domain.add pvar typ astate
           else
             astate
 
       | Load (id, Lindex (Lvar pvar, Const (Cint s)), typ, loc) -> 
           if Pvar.is_global pvar then
+            let () = L.progress "\tGlobal: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
             let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
             Domain.add pvar typ' astate
           else
@@ -188,12 +190,14 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
 
       | Store (Lvar pvar, typ, e2, loc) -> 
           if Pvar.is_global pvar then
+            let () = L.progress "\tGlobal: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
             Domain.add pvar typ astate
           else
             astate
 
       | Store (Lindex (Lvar pvar, Const (Cint s)), typ, e2, loc) -> 
           if Pvar.is_global pvar then
+            let () = L.progress "\tGlobal: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
             let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
             Domain.add pvar typ' astate
           else
@@ -201,6 +205,7 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
 
       | Store (e1, typ, Lvar pvar, loc) -> 
           if Pvar.is_global pvar then
+            let () = L.progress "\tGlobal: %a: %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
             Domain.add pvar (Typ.strip_ptr typ) astate
           else
             astate
@@ -246,15 +251,17 @@ end = struct
     let glob_env = "glob_env.dat"
     let func_env = "funcs.dat"
 
-    let store a = 
-        let oc = Pervasives.open_out glob_env in
-        Marshal.to_channel oc a [];
-        Pervasives.close_out oc
-
     let load () = 
-        let ic = Pervasives.open_in glob_env in
-        let res = Marshal.from_channel ic in
-        Pervasives.close_in ic; res
+      let ic = Pervasives.open_in glob_env in
+      let res = Marshal.from_channel ic in
+      Pervasives.close_in ic; res
+
+    let store a = 
+      let tn = try load () with _ -> NameType.empty in
+      let tn' = NameType.join a tn in
+      let oc = Pervasives.open_out glob_env in
+      Marshal.to_channel oc tn' [];
+      Pervasives.close_out oc
 
     let store_fun a = 
         let oc = Pervasives.open_out func_env in
