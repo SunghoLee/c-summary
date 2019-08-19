@@ -147,7 +147,9 @@ let parse_type typ = InferIR.Typ.(match typ with
     extract_struct_name c
     |> (function
         | "_jobject" -> "Object"
-        | "_jclass" -> "Class"
+        | "_jclass" -> "__Model.__Class"
+        | "_jmethodID" -> "__Model.__MethodID"
+        | "_jfieldID" -> "__Model.__FieldID"
         | "_jthrowable" -> "Throwable"
         | "_jstring" -> "String"
         | "_jarray" -> "Array"
@@ -238,13 +240,13 @@ let get_summary_k proc default cb =
   | None -> default 0
   | Some s -> match s.Summary.payloads.Payloads.semantic_summary with
     | None -> default 1
-    | Some ss -> cb s ss
+    | Some (ss, _) -> cb s ss
 
-let parse_body state name {heap; logs} =
+let parse_body state glocs name {heap; logs} =
   CallLogs.fold (fun e l -> e :: l) logs []
   |> sort_logs
   |> solve_dependency
-  |> M.method_body state name heap
+  |> M.method_body state glocs name heap
   
 (* Generator *)
 (* PkgClss: (key=Package-Class, value=methods) map *)
@@ -287,7 +289,7 @@ let gen_compilation_units pkgclss =
       (pkg, cls, mk_compilation_unit p [Y.Class c]) :: b)
     pkgclss []
 
-let each_proc_cb' state res s ss proc is_ent procname is_java parsed = 
+let each_proc_cb' state glocs res s ss proc is_ent procname is_java parsed = 
   F.printf "each_proc_cb': %s\n" procname;
   let attr = Summary.get_attributes s in
   let ret_type = parse_type (attr.ret_type) in
@@ -297,27 +299,63 @@ let each_proc_cb' state res s ss proc is_ent procname is_java parsed =
                         ret_type = ret_type;
                         is_entry = is_ent;
                         formals = formals }) in
-  let body = Y.Block (parse_body state proc ss) in
+  let body = Y.Block (parse_body state glocs proc ss) in
   insert_method res parsed is_static ret_type formals body
 
 (* each_proc_cb: process for procedures *)
-let each_proc_cb state res (proc, is_ent) =
+let each_proc_cb state glocs res (proc, is_ent) =
   let procname = InferIR.Typ.Procname.to_string proc in
   F.printf "Current Proc Name: %s\n" procname;
   let is_java, parsed = parse_java_name procname in
   get_summary_k proc (fun x -> F.printf "Failed to get summary %d\n" x; res) (fun s ss ->
-    each_proc_cb' state res s ss proc is_ent procname is_java parsed
+    each_proc_cb' state glocs res s ss proc is_ent procname is_java parsed
     |> S.fold_name_of state procname
       (fun name res -> 
-         each_proc_cb' state res s ss proc is_ent procname true name))
+         each_proc_cb' state glocs res s ss proc is_ent procname true name))
+
+
+
+let gen_global_class glocs =
+  print_string" gen_global_class\n";
+  let body = LocSet.fold (fun x res ->
+      match x with
+      | Loc.Implicit name -> 
+          let name' = H.encode_global_name name in
+          print_string ("* Implicit: " ^ name' ^ "\n");
+          Y.(Field {f_var = {
+              v_mods = [Public; Static];
+              v_type = TypeName
+                  (List.map (fun x -> ident x 0) ["java"; "lang"; "Object"]);
+              v_name = ident name' 0};
+                    f_init = None}) :: res
+      | _ ->
+          print_string "* : -\n";
+          res) glocs [] in
+  let pkg = ["__Model"] in
+  let p = Some [Y.ident "__Model" 0] in
+  let cls = "__Global" in
+  let c = mk_public_class cls body in
+  (pkg, cls, mk_compilation_unit p [Y.Class c])
+
+let load_glocs () = 
+  try
+    let ic = Pervasives.open_in "global_locations.dat" in
+    let res = Marshal.from_channel ic in
+    Pervasives.close_in ic;
+    F.printf "glocs = %a\n" LocSet.pp res;
+    res
+  with _ ->
+    LocSet.empty
 
 (* generate: generate compilation_units from infer-out *)
 let generate () =
   let procs = get_all_procs () in
+  let glocs = load_glocs () in
   print_string ("#procs = " ^ string_of_int (List.length procs) ^ "\n");
   let state = S.mk_empty () in
-  List.fold_left (each_proc_cb state) PkgClss.empty procs
+  List.fold_left (each_proc_cb state glocs) PkgClss.empty procs
   |> gen_compilation_units
+  |> fun x -> gen_global_class glocs :: x
 
 (* write_as_files: generate java files from the result of `generate` *)
 let write_as_files base_dir result =

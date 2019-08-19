@@ -28,7 +28,7 @@ module NameType = struct
       | Tvoid, _ -> 1
       | _, Tvoid -> -1
       | _ -> 
-          if typ1 = typ2 then
+          if typ1.Typ.desc = typ2.Typ.desc then
             1
           else
             failwith (F.asprintf "Not compatible types: %a <> %a" (Typ.pp_full Pp.text) typ1 (Typ.pp_full Pp.text) typ2)
