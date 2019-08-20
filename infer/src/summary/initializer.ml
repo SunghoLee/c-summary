@@ -113,11 +113,14 @@ let mk_tmap loc_typs tenv tmap =
       match typ.Typ.desc with
       | Tptr (typ', kind) ->
           f visited' ((Loc.mk_var_pointer loc), typ') tmap'
-      | Tstruct name ->
-          Helper.get_fld_and_typs name tenv
-          |> Caml.List.fold_left 
-              (fun tmap (field, typ) -> f visited' (Loc.mk_offset loc (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer)))) tmap)
-                tmap'
+      | Tstruct name ->(
+          try
+            Helper.get_fld_and_typs name tenv
+            |> Caml.List.fold_left 
+                (fun tmap (field, typ) -> f visited' (Loc.mk_offset loc (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer)))) tmap)
+                  tmap'
+          with _ ->
+            tmap')
       | Tarray {elt; length = Some i} -> (* fixed size arrays *)
           (*let loc' = Loc.unwrap_ptr loc in (* C allocates array location directly to variable address *)
           let index = (IntLit.to_int_exn i) - 1 in
@@ -193,10 +196,13 @@ let init_heap ~this ~do_array loc_typs tenv heap tmap = (* loc_types: local list
           iter_loc visited' new_cst heap' (ptr_loc, ptr_typ)
       | Tstruct name -> (
         if not this then
-          Helper.get_fld_and_typs name tenv
-          |> Caml.List.fold_left
-              (fun heap (field, typ) ->
-                iter_loc visited' base_cst heap (Loc.mk_offset addr (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap 
+          try
+            Helper.get_fld_and_typs name tenv
+            |> Caml.List.fold_left
+                (fun heap (field, typ) ->
+                  iter_loc visited' base_cst heap (Loc.mk_offset addr (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap 
+          with _ ->
+            heap
         else
           heap)
       | Tarray {elt; length = Some i} -> (* fixed size arrays *)

@@ -59,7 +59,13 @@ let collect_all_store summs =
   let f gs s = (
     match s.Summary.payloads.Payloads.semantic_summary with
     | Some (_, gs') ->
-        GH.GlobalStore.fold (fun l v gs'' -> GH.GlobalStore.weak_update l v gs'') gs' gs
+        GH.GlobalStore.fold (fun l v gs'' -> 
+          match GH.GlobalStore.find_opt l gs'' with
+          | Some v' ->
+              GH.GlobalStore.add l (Val.union v v') gs''
+          | None ->
+              GH.GlobalStore.add l v gs''
+    ) gs' gs
     | None ->
         gs)
   in

@@ -63,13 +63,16 @@ let rec expand_glob_loc tenv preloc nloc typ ienv =
       expand_glob_loc tenv preloc' nloc' typ' ienv'
 
   | Tstruct name -> (
-      HelperFunction.get_fld_and_typs name tenv
-      |> Caml.List.fold_left
-          (fun ienv' (field, typ) ->
-            let noffset = Loc.mk_offset nloc (Loc.mk_const_of_string field) in
-            let poffset = Loc.mk_offset preloc (Loc.mk_const_of_string field) in
-            let ienv'' = InstEnv.add poffset (Val.singleton (noffset, Cst.cst_true)) ienv' in
-            expand_glob_loc tenv poffset noffset (Typ.mk (Tptr (typ, Pk_pointer))) ienv'') ienv
+      try
+        HelperFunction.get_fld_and_typs name tenv
+        |> Caml.List.fold_left
+            (fun ienv' (field, typ) ->
+              let noffset = Loc.mk_offset nloc (Loc.mk_const_of_string field) in
+              let poffset = Loc.mk_offset preloc (Loc.mk_const_of_string field) in
+              let ienv'' = InstEnv.add poffset (Val.singleton (noffset, Cst.cst_true)) ienv' in
+              expand_glob_loc tenv poffset noffset (Typ.mk (Tptr (typ, Pk_pointer))) ienv'') ienv
+      with _ ->
+        ienv
   )
 
   | Tarray {elt; length = Some i} -> (* fixed size arrays *)
