@@ -175,7 +175,7 @@ let parse_formals is_java
             Y.({v_mods = [];
                 v_type = parse_type t;
                 v_name = ident (InferIR.Mangled.to_string m) 0})) in
-  if (*is_java &&*) List.length formals >= 2
+  if is_java && List.length formals >= 2
   then
     let fs = List.tl formals in
     let is_static = is_jclass (snd (List.hd fs)) in
@@ -190,7 +190,13 @@ let parse_formals is_java
       else ProcInfo.Method (env, this) in
     kind, is_static, res
   else
-    ProcInfo.C, false, (*f formals*) []
+    let object_type =
+      Y.(TypeName [ident "java" 0; ident "lang" 0; ident "Object" 0]) in
+    let dummy_args = List.map (fun (m, t) ->
+        Y.({v_mods = [];
+            v_type = object_type;
+            v_name = ident (InferIR.Mangled.to_string m) 0})) formals in
+    ProcInfo.C, true, dummy_args
 
 (* sort_logs: sort logs *)
 let sort_logs =
@@ -263,26 +269,30 @@ let encode_class_name name =
     if idx >= l then Buffer.contents buf
     else match String.get name idx with
       | '$' -> Buffer.add_string buf "__"; f (idx + 1)
-      | x -> Buffer.add_char buf x; f (idx + 1)
-  in f 0 ^ "_"
+      | x -> Buffer.add_char buf x; f (idx + 1) in
+  let suffix = if l >= 2 && String.sub name 0 2 = "__" then "" else "_" in
+  f 0 ^ suffix
 
+let insert_decl pkgclss pkg cls decl =
+  PkgClss.update
+    (pkg, encode_class_name cls)
+    (function
+     | None -> Some [decl]
+     | Some s -> Some (decl :: s))
+    pkgclss
+  
 (* insert_method: insert method into PkgClss-Methods map *)
 let insert_method pkgclss (pkg, cls, mth, sign)
                   static ret_type formals body =
   let mods = [Y.Public] @ if static then [Y.Static] else [] in
   let m = mk_method mods mth ret_type formals [] body in
-  PkgClss.update
-    (pkg, encode_class_name cls)
-    (function
-     | None -> Some [m]
-     | Some s -> Some (m :: s))
-    pkgclss
+  insert_decl pkgclss pkg cls (Y.Method m)
 
 (* gen_compilation_units: make compilation_units from PkgClss-Methods map *)
 let gen_compilation_units pkgclss =
   PkgClss.fold
     (fun (pkg, cls) a b ->
-      let c = mk_public_class cls (List.map (fun x -> Y.Method x) a) in
+      let c = mk_public_class cls a in
       let p = match pkg with
         | [] -> None
         | _ -> Some (List.map (fun x -> Y.ident x 0) pkg) in
@@ -302,40 +312,25 @@ let each_proc_cb' state glocs res s ss proc is_ent procname is_java parsed =
   let body = Y.Block (parse_body state glocs proc ss) in
   insert_method res parsed is_static ret_type formals body
 
+let is_global_fn name =
+  let s = "JNI_OnLoad" in
+  let l = String.length s in
+  String.length name >= l && String.sub name 0 l = s
+
 (* each_proc_cb: process for procedures *)
 let each_proc_cb state glocs res (proc, is_ent) =
   let procname = InferIR.Typ.Procname.to_string proc in
   F.printf "Current Proc Name: %s\n" procname;
   let is_java, parsed = parse_java_name procname in
   get_summary_k proc (fun x -> F.printf "Failed to get summary %d\n" x; res) (fun s ss ->
-    each_proc_cb' state glocs res s ss proc is_ent procname is_java parsed
-    |> S.fold_name_of state procname
-      (fun name res -> 
-         each_proc_cb' state glocs res s ss proc is_ent procname true name))
-
-
-
-let gen_global_class glocs =
-  print_string" gen_global_class\n";
-  let body = LocSet.fold (fun x res ->
-      match x with
-      | Loc.Implicit name -> 
-          let name' = H.encode_global_name name in
-          print_string ("* Implicit: " ^ name' ^ "\n");
-          Y.(Field {f_var = {
-              v_mods = [Public; Static];
-              v_type = TypeName
-                  (List.map (fun x -> ident x 0) ["java"; "lang"; "Object"]);
-              v_name = ident name' 0};
-                    f_init = None}) :: res
-      | _ ->
-          print_string "* : -\n";
-          res) glocs [] in
-  let pkg = ["__Model"] in
-  let p = Some [Y.ident "__Model" 0] in
-  let cls = "__Global" in
-  let c = mk_public_class cls body in
-  (pkg, cls, mk_compilation_unit p [Y.Class c])
+    let cb is_java parsed_name res =
+      each_proc_cb' state glocs res s ss proc
+        is_ent procname is_java parsed_name in
+    cb is_java parsed res
+    |> S.fold_name_of state procname (cb true)
+    |> (if is_global_fn procname
+        then cb false ([M.model_pkg_name], "__Global", procname, None)
+        else (fun x -> x)))
 
 let load_glocs () = 
   try
@@ -348,6 +343,22 @@ let load_glocs () =
     let _ = Printf.eprintf "errorerror: %s\n" (Printexc.to_string e) in
     LocSet.empty
 
+let insert_global_loc loc pkgclss =
+  let pkg = ["__Model"] in
+  let cls = "__Global" in
+  match loc with
+  | Loc.Implicit name ->
+      let name' = H.encode_global_name name in
+      print_string ("* Global Implicit: " ^ name' ^ "\n");
+      let field = Y.(Field {f_var = {
+          v_mods = [Public; Static];
+          v_type = TypeName
+              (List.map (fun x -> ident x 0) ["java"; "lang"; "Object"]);
+          v_name = ident name' 0};
+                f_init = None}) in
+      insert_decl pkgclss pkg cls field
+  | _ -> pkgclss
+
 (* generate: generate compilation_units from infer-out *)
 let generate () =
   let procs = get_all_procs () in
@@ -355,8 +366,8 @@ let generate () =
   print_string ("#procs = " ^ string_of_int (List.length procs) ^ "\n");
   let state = S.mk_empty () in
   List.fold_left (each_proc_cb state glocs) PkgClss.empty procs
+  |> LocSet.fold insert_global_loc glocs
   |> gen_compilation_units
-  |> fun x -> gen_global_class glocs :: x
 
 (* write_as_files: generate java files from the result of `generate` *)
 let write_as_files base_dir result =

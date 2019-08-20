@@ -163,6 +163,8 @@ module Loc = struct
 
   let is_const = function Const _ -> true | _ -> false
 
+  let is_numeric_const = function Const i -> (match i with Z _ -> true | _ -> false) | _ -> false
+
   let is_pointer = function Pointer _ -> true | _ -> false
 
   let is_fun_pointer = function FunPointer _ -> true | _ -> false

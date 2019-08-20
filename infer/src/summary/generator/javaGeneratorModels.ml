@@ -277,7 +277,7 @@ module ModelHelper = struct
   let unpack_arg heap loc = match loc with
     | Loc.Implicit t -> (match Heap.find_opt loc heap with
       | None -> loc
-      | Some x -> match Val.elements x with
+      | Some x -> match Val.filter (fun (l,cst) -> not (Loc.is_numeric_const l)) x |> Val.elements with
         | [] -> loc
         | (l, c) :: xs -> l)
     | _ -> loc
