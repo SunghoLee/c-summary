@@ -60,12 +60,16 @@ let rec has_arbitrary_arr_index_gb (loc: Loc.t) =
 let load v heap =
   (fun ((loc: Loc.t), cst) (v, heap) ->
     let v', heap' = 
-      if has_arbitrary_arr_index_gb loc then
-        let nv = Val.singleton (Loc.mk_concrete_pointer loc, Cst.cst_true) in
-        let heap' = Heap.add loc nv heap in
-        nv, heap'
-      else 
-        Heap.find loc heap, heap
+      (match Heap.find_opt loc heap with
+      | None -> 
+          if has_arbitrary_arr_index_gb loc then
+            let nv = Val.singleton (Loc.mk_concrete_pointer loc, Cst.cst_true) in
+            let heap' = Heap.add loc nv heap in
+            nv, heap'
+          else 
+            Val.empty, heap
+      | Some v ->
+          v, heap)
     in
     let v'' = v' ^ cst in
     v'' + v, heap' )

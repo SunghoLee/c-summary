@@ -79,6 +79,7 @@ let rec mk_dummy_heap tenv visited heap (addr, typ) =
   if Heap.mem addr heap then
     heap
   else
+    let _ = (L.progress "========> Does Not exist! %a:%a\n@." Loc.pp addr (Typ.pp_full Pp.text) typ) in
     let desc = typ.Typ.desc in
     let visited' = TypSet.add typ visited in
     match desc with

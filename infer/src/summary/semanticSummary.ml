@@ -213,8 +213,6 @@ module TransferFunctions = struct
             (fun ((arr_loc, arr_cst), (index_loc, index_cst)) v -> (* loc of e1[e2] *)
               Helper.(v + Val.singleton ((Loc.mk_offset arr_loc index_loc), Cst.cst_and arr_cst index_cst)))
             arr_index_pair Val.empty in
-          (if !debug then
-            L.progress "VVVVVVVVVVVV: %a\n@." Val.pp res);
             res
       | Sizeof data -> 
           (* TODO: Calculate the size of data *)
@@ -348,7 +346,6 @@ module TransferFunctions = struct
           in
           let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
           let log = LogUnit.mk [cs] ret_addr jnifun arg_addrs dumped_heap in
-          let _ = L.progress "NEWLOG: %a\n@." LogUnit.pp log in
           let logs' = CallLogs.add log logs in  
           mk_domain heap' logs'
 
@@ -481,9 +478,9 @@ module Analyzer = AbstractInterpreter.MakeWTO (TransferFunctions)
 let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
     let proc_name = Procdesc.get_proc_name proc_desc in
     if AnalysisTargets.is_targeted proc_name then (
-      (if (Typ.Procname.to_string proc_name) = "JavaCPP_getClass" then
+      (*(if (Typ.Procname.to_string proc_name) = "JavaCPP_getClass" then
         debug := true
-      );
+      );*)
         let () = L.progress "Analyzing a function %s\n@." (Typ.Procname.to_string proc_name) in
         let () = L.progress "ATTRIBUTE:\n%a\n@." ProcAttributes.pp (Procdesc.get_attributes proc_desc) in
         let heap = Initializer.init tenv proc_desc in

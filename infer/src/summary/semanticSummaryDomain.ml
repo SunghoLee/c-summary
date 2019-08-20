@@ -687,13 +687,6 @@ module Heap = struct
     | None ->
         add loc v heap
 
-  let add l v heap =
-    if l = (Loc.mk_const_of_z Z.zero) then
-      heap
-    else if Loc.is_dyn l then
-      weak_update l v heap
-    else
-      add l v heap
     
   let find_offsets_of l heap =
     LocSet.filter  
@@ -706,6 +699,14 @@ module Heap = struct
         v
     | None ->
         Val.empty
+
+  let add l v heap =
+    if l = (Loc.mk_const_of_z Z.zero) then
+      heap
+    else if Loc.is_dyn l then
+      weak_update l v heap
+    else
+      add l v heap
 
   let ( <= ) lhs rhs =
     let f = fun key val1 ->

@@ -225,7 +225,8 @@ let comp_heap base caller callee ienv =
         let iloc_v = InstEnv.find loc ienv in
         Val.fold update_val iloc_v base
   in
-  Heap.fold f callee base
+  let res = Heap.fold f callee base in
+  res
   (*
   let new_heap = Heap.fold f callee base in
   Heap.fold Heap.add new_heap base*)
@@ -241,5 +242,4 @@ let comp_log call_site base callee_logs caller_heap ienv =
     CallLogs.add log'' base
   in
   let res = CallLogs.fold f callee_logs base in
-  let _ = L.progress "COMPLOG: %a\n@." CallLogs.pp res in
   res
