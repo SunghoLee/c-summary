@@ -42,21 +42,41 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
 
   let pp_inst proc_data (i: Sil.instr) = 
     let proc_name_str = Typ.Procname.to_string (Procdesc.get_proc_name proc_data.ProcData.pdesc) in
-    L.progress "%s: [%s] %a\n@." proc_name_str (get_inst_type i) (Sil.pp_instr ~print_types:true Pp.text) i 
+    match i with
+    | Call (_, _, args, _, _) -> 
+        let arg_str = Caml.List.fold_left (fun s (e, t) -> s ^ " " ^ (F.asprintf "%a" Exp.pp e) ^ ":" ^ (F.asprintf "%a" (Typ.pp_full Pp.text) t)) "" args in
+        L.progress "%s: [%s] %a - %s\n@." proc_name_str (get_inst_type i) (Sil.pp_instr ~print_types:true Pp.text) i arg_str
+    | _ ->
+        L.progress "%s: [%s] %a\n@." proc_name_str (get_inst_type i) (Sil.pp_instr ~print_types:true Pp.text) i
+
 
   let rec handle_arr (arr: Exp.t) (i: Exp.t) typ = 
     match arr,i with
-    | Lvar pvar, Const (Cint s) ->
-        if Pvar.is_global pvar then
-          let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
-          Some (pvar, typ')
-        else
-          None
+    | Lvar pvar, index -> (
+      match index with
+      | Const (Cint s) ->
+          if Pvar.is_global pvar then
+            let typ' = Typ.mk_array ~length:(IntLit.add s IntLit.one) typ in
+            Some (pvar, typ')
+          else
+            None
+      | _ ->
+          if Pvar.is_global pvar then
+            let typ' = Typ.mk_array ~length:(IntLit.zero) typ in
+            Some (pvar, typ')
+          else
+            None
+    )
 
-    | Lindex (arr', i'), Const (Cint s)  -> (
+    | Lindex (arr', i'), index  -> (
         match handle_arr arr' i' typ with
-        | Some (p, t) ->
-            Some(p, Typ.mk_array ~length:(IntLit.add s IntLit.one) t)
+        | Some (p, t) -> (
+          match index with
+          | Const (Cint s) -> 
+              Some(p, Typ.mk_array ~length:(IntLit.add s IntLit.one) t)
+          | _ ->
+              Some(p, Typ.mk_array ~length:(IntLit.zero) t)
+        )
         | _ ->
             None
     )
@@ -127,17 +147,14 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
 
       (* Calling an initializer function behaves quite differently from normal functions. The argument type is not deterministic. *)
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) when String.is_prefix (Typ.Procname.to_string callee_pname) ~prefix:"__variable_initialization" ->
-          astate
-          (*
-          let _ = Caml.List.iter (fun (e, t) -> L.progress "INIT ARG: %a:%a\n@." Exp.pp e (Typ.pp_full Pp.text) t) args in
-          Caml.List.fold_left (fun i (e, t) -> exec_expr i e (Typ.mk (Tptr (t, Pk_pointer)))) astate args*)
+          (*Caml.List.fold_left (fun i (e, t) -> exec_expr i e (Typ.mk (Tptr (t, Pk_pointer)))) astate args*)
+          let _ = Caml.List.iter (fun (e, t) -> L.progress "ARG: %a:%a\n@." Exp.pp e (Typ.pp_full Pp.text) t) args in
+          let _ = L.progress "CALLLE: %s\n@." (Typ.Procname.to_string callee_pname) in
+          Caml.List.fold_left (fun i (e, t) -> handle_global e t i) astate args
 
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) -> 
           let _ = Caml.List.iter (fun (e, t) -> L.progress "ARG: %a:%a\n@." Exp.pp e (Typ.pp_full Pp.text) t) args in
           let _ = L.progress "CALLLE: %s\n@." (Typ.Procname.to_string callee_pname) in
-          (if (Typ.Procname.to_string callee_pname) = "speex_bits_init" then
-          Caml.List.iter (fun (e, t) -> L.progress "SPEEX ARG: %a:%a\n@." Exp.pp e (Typ.pp_full Pp.text) t) args
-          );
           Caml.List.fold_left (fun i (e, t) -> 
             if Typ.is_pointer t then
               handle_global e (Typ.strip_ptr t) i

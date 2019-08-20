@@ -169,14 +169,17 @@ module TransferFunctions = struct
             let param_pk = PKFactory.mk_pk_w_ctxt [ ctxt ] param in
             let arg_lpk = PKFactory.mk_lpk_w_ctxt [ ctxt ] arg in
             let m' = Domain.eq param_pk arg_lpk m in
-            HelperFunction.get_fld_and_typs name tenv
-            |> Caml.List.fold_left 
-                (fun m (field, typ) -> 
-                  if is_primitive typ then
-                    m
-                  else
-                    update visited' (Domain.Loc.mk_offset param (Domain.Loc.mk_const_of_string field)) (Domain.Loc.mk_var_pointer (Domain.Loc.mk_offset arg (Domain.Loc.mk_const_of_string field))) typ  m)
-                m'
+            (try 
+              HelperFunction.get_fld_and_typs name tenv
+              |> Caml.List.fold_left 
+                  (fun m (field, typ) -> 
+                    if is_primitive typ then
+                      m
+                    else
+                      update visited' (Domain.Loc.mk_offset param (Domain.Loc.mk_const_of_string field)) (Domain.Loc.mk_var_pointer (Domain.Loc.mk_offset arg (Domain.Loc.mk_const_of_string field))) typ  m)
+                  m'
+            with _ ->
+              m)
         | Tint _ | Tfloat _ | Tfun _ | TVar _ | Tarray _ | Tvoid -> 
             m
         | _ -> failwith (F.asprintf "Match failure: %a" (Typ.pp_full Pp.text) typ)
@@ -269,31 +272,35 @@ module TransferFunctions = struct
           let lhs_addr = Domain.Loc.of_id ~proc:scope id |> PKFactory.mk_pk in
           (match Ondemand.get_proc_desc callee_pname with 
           | Some callee_desc -> (* no exisiting function: because of functions Infer made *)
-              (match get_proc_summary true ~caller:pdesc callee_pname with
-              | Some callee_m ->
-                  let args_v = 
-                    Caml.List.map (fun (arg, typ) -> arg) args |> Caml.List.map (exec_expr scope) in
-                  let args_v' = (* Ignore variadic arguments *)
-                    let callee_attr = Procdesc.get_attributes callee_desc in
-                    if callee_attr.ProcAttributes.is_variadic then
-                      let arg_len = (Caml.List.length callee_attr.ProcAttributes.formals) in
-                      partial_list args_v arg_len
-                    else
-                      args_v
-                  in
-                  let cs = CallSite.make (Procdesc.get_proc_name pdesc) loc in
-                  let ctxt = Domain.mk_ctxt cs args_v' in
-                  let callee_m' = Domain.assign_context ctxt callee_m in
-                  let m' = Domain.join m callee_m' in
-                  let params = Caml.List.map (fun (param, typ) -> (Domain.Loc.mk_explicit param, typ)) (fun_params callee_desc) in
-                  let m'' = match_param_args tenv ctxt params args_v' m' in
-                  let ret_addr = Domain.Loc.mk_ret_of_pname callee_pname |> PKFactory.mk_pk in
-                  let ret_param_addr = Domain.VVar.of_string "__return_param" ~proc:scope |> Domain.Loc.mk_explicit |> PKFactory.mk_pk in
-                  Domain.eq lhs_addr ret_addr m'' |> Domain.eq lhs_addr ret_param_addr
-              | None -> 
-                  (*let () = L.progress "Not existing callee. Just ignore this call.\n@." in*)
-                  m
-                  )
+              (*let _ = L.progress "ARG: %d, PARAM: %d\n@." (Caml.List.length args_v') (Caml.List.length params) in*)
+              if (Caml.List.length (fun_params callee_desc)) = (Caml.List.length args) then
+                (match get_proc_summary true ~caller:pdesc callee_pname with
+                | Some callee_m ->
+                    let args_v = 
+                      Caml.List.map (fun (arg, typ) -> arg) args |> Caml.List.map (exec_expr scope) in
+                    let args_v' = (* Ignore variadic arguments *)
+                      let callee_attr = Procdesc.get_attributes callee_desc in
+                      if callee_attr.ProcAttributes.is_variadic then
+                        let arg_len = (Caml.List.length callee_attr.ProcAttributes.formals) in
+                        partial_list args_v arg_len
+                      else
+                        args_v
+                    in
+                    let cs = CallSite.make (Procdesc.get_proc_name pdesc) loc in
+                    let ctxt = Domain.mk_ctxt cs args_v' in
+                    let callee_m' = Domain.assign_context ctxt callee_m in
+                    let m' = Domain.join m callee_m' in
+                    let params = Caml.List.map (fun (param, typ) -> (Domain.Loc.mk_explicit param, typ)) (fun_params callee_desc) in
+                    let m'' = match_param_args tenv ctxt params args_v' m' in
+                    let ret_addr = Domain.Loc.mk_ret_of_pname callee_pname |> PKFactory.mk_pk in
+                    let ret_param_addr = Domain.VVar.of_string "__return_param" ~proc:scope |> Domain.Loc.mk_explicit |> PKFactory.mk_pk in
+                    Domain.eq lhs_addr ret_addr m'' |> Domain.eq lhs_addr ret_param_addr
+                | None -> 
+                    (*let () = L.progress "Not existing callee. Just ignore this call.\n@." in*)
+                    m
+                    )
+              else
+                m
           | None -> 
               (*let () = L.progress "Not existing callee (empty declaration). Just ignore this call.\n@." in*)
               m)

@@ -67,6 +67,8 @@ end
 
 (* module TypeMap = struct ... end was moved to 'initializer.ml' *)
 
+let debug = ref false 
+
 module CFG = ProcCfg.NormalOneInstrPerNode
 
 module TransferFunctions = struct
@@ -147,6 +149,7 @@ module TransferFunctions = struct
     | None -> 
         None
 
+
   let rec exec_expr scope location heap (expr: Exp.t) = 
       match expr with
       | Var i -> 
@@ -191,11 +194,12 @@ module TransferFunctions = struct
             (fun (obj_addr, obj_addr_cst) v -> Helper.(((Heap.find obj_addr heap) ^ obj_addr_cst) + v))
             obj_addr_v Val.empty
           in
-          Val.fold (fun (obj_loc, obj_cst) vals -> 
+          let res = Val.fold (fun (obj_loc, obj_cst) vals -> 
             if not (Loc.is_const obj_loc) then
               Val.add (Loc.mk_offset obj_loc field, obj_cst) vals
             else vals)
-          obj_v Val.empty
+          obj_v Val.empty in
+            res
           (*Val.map (fun (obj_loc, obj_cst) -> Loc.mk_offset obj_loc field, obj_cst) obj_v*)
       | Lindex (e1, e2) -> (* &(e1[e2]) *)
           let index_v = exec_expr scope location heap e2 in (* value of e2 *)
@@ -205,10 +209,13 @@ module TransferFunctions = struct
             arr_addr_v Val.empty
           in
           let arr_index_pair = Helper.(arr_v * index_v) in (* all the pairs of e1 val and e2 val *)
-          Caml.List.fold_right
+          let res = Caml.List.fold_right
             (fun ((arr_loc, arr_cst), (index_loc, index_cst)) v -> (* loc of e1[e2] *)
               Helper.(v + Val.singleton ((Loc.mk_offset arr_loc index_loc), Cst.cst_and arr_cst index_cst)))
-            arr_index_pair Val.empty
+            arr_index_pair Val.empty in
+          (if !debug then
+            L.progress "VVVVVVVVVVVV: %a\n@." Val.pp res);
+            res
       | Sizeof data -> 
           (* TODO: Calculate the size of data *)
           Val.singleton (Loc.mk_const_of_z Z.one, Cst.cst_true)
@@ -252,9 +259,9 @@ module TransferFunctions = struct
           let lhs_addr = Loc.of_id id ~proc:scope in
           let (glob_pvar, glob_typ) = get_global_pvar_and_typ e1 in
           let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
-          let glob_v = exec_expr scope loc heap' e1 |> (fun x -> Helper.load x heap') in
-          let heap'' = Heap.add lhs_addr glob_v heap' in
-          mk_domain heap'' logs
+          let glob_v, heap'' = exec_expr scope loc heap' e1 |> (fun x -> Helper.load x heap') in
+          let heap''' = Heap.add lhs_addr glob_v heap'' in
+          mk_domain heap''' logs
       )
 
       | Load (id, e1, typ, loc) when JniModel.is_jni_env_ptr_for_c typ -> 
@@ -268,9 +275,9 @@ module TransferFunctions = struct
 
       | Load (id, e1, typ, loc) -> 
           let lhs_addr = Loc.of_id id ~proc:scope in
-          let rhs_v = exec_expr scope loc heap e1 |> (fun x -> Helper.load x heap) in
-          let heap' = Heap.add lhs_addr rhs_v heap in
-          mk_domain heap' logs
+          let rhs_v, heap' = exec_expr scope loc heap e1 |> (fun x -> Helper.load x heap) in
+          let heap'' = Heap.add lhs_addr rhs_v heap' in
+          mk_domain heap'' logs
 
       | Store (Lvar pvar, typ, e2, loc) when Pvar.is_return pvar -> (* for return statements *)
           let rhs_v = exec_expr scope loc heap e2 in
@@ -341,6 +348,7 @@ module TransferFunctions = struct
           in
           let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
           let log = LogUnit.mk [cs] ret_addr jnifun arg_addrs dumped_heap in
+          let _ = L.progress "NEWLOG: %a\n@." LogUnit.pp log in
           let logs' = CallLogs.add log logs in  
           mk_domain heap' logs'
 
@@ -348,59 +356,62 @@ module TransferFunctions = struct
           let lhs_addr = Loc.of_id ~proc:scope id in
           (match Ondemand.get_proc_desc callee_pname with 
           | Some callee_desc -> (* no exisiting function: because of functions Infer made *)
-              (match get_proc_summary true ~caller:pdesc callee_pname with
-              | Some ({ heap = end_heap; logs = end_logs }, gs) ->
-                let heap' = Heap.optimize ~scope heap in
-                let heap'', args_v = calc_args tenv scope loc heap' args in
-                let args_v' = (* Ignore variadic arguments *)
-                  let callee_attr = Procdesc.get_attributes callee_desc in
-                  if callee_attr.ProcAttributes.is_variadic then
-                    let arg_len = (Caml.List.length callee_attr.ProcAttributes.formals) in
-                    let rec sublist l i =
-                      if i = arg_len then
-                        []
-                      else (
-                        match l with
-                        | [] ->
-                            failwith "The number of arguments is less then formals."
-                        | h :: t ->
-                            h :: (sublist t (i + 1))
-                      )
-                    in
-                    sublist args_v 0
-                  else
-                    args_v
-                in
-                let ienv = Instantiation.mk_ienv tenv scope (fun_params callee_desc) args_v' end_heap heap'' in
-                (*let () = L.progress "# Start composition.\n@." in*)
-                let start_gettimeofday = Unix.gettimeofday () in
-                let heap''' = Instantiation.comp_heap heap'' heap'' end_heap ienv in
-                (*let () = print_to_file heap'' end_heap heap''' ienv in
-                let () = Caml.List.iter (fun arg_v -> L.progress "ARG: %a\n@." Val.pp arg_v) args_v' in 
-                let () = L.progress "#Instantiation: HeapSize Changed ((%d + %d) -> %d)\n@." (Heap.size heap'') (Heap.size end_heap) (Heap.size heap''') in
-                let _ = read_line () in*)
-                let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
-                let logs' = Instantiation.comp_log cs logs end_logs heap''' ienv in
-                let end_gettimeofday = Unix.gettimeofday () in
-                (*let () = L.progress "\tDone: %f\n@." (end_gettimeofday -. start_gettimeofday) in*)
-                let ret_addr = Loc.mk_ret_of_pname callee_pname in
-                let heap'''' = 
-                  (match Heap.find_opt ret_addr heap''' with
-                  | Some v -> 
-                      Heap.add lhs_addr v (Heap.remove ret_addr heap''')
-                  | None -> (* kind of passing parameter as a return value *)
-                      let ret_param_addr = VVar.of_string "__return_param" ~proc:scope |> Loc.mk_explicit in
-                      (match Heap.find_opt ret_param_addr heap''' with
-                      | Some v ->
-                          Heap.add lhs_addr v (Heap.remove ret_param_addr heap''')
-                      | None ->
-                          heap''' ))
-                in
-                mk_domain heap'''' logs'
-              | None -> 
-                  (*let () = L.progress "Not existing callee. Just ignore this call.\n@." in*)
-                  mk_domain heap logs
-                  )
+              if (Caml.List.length (fun_params callee_desc)) = (Caml.List.length args) then
+                (match get_proc_summary true ~caller:pdesc callee_pname with
+                | Some ({ heap = end_heap; logs = end_logs }, gs) ->
+                  let heap' = Heap.optimize ~scope heap in
+                  let heap'', args_v = calc_args tenv scope loc heap' args in
+                  let args_v' = (* Ignore variadic arguments *)
+                    let callee_attr = Procdesc.get_attributes callee_desc in
+                    if callee_attr.ProcAttributes.is_variadic then
+                      let arg_len = (Caml.List.length callee_attr.ProcAttributes.formals) in
+                      let rec sublist l i =
+                        if i = arg_len then
+                          []
+                        else (
+                          match l with
+                          | [] ->
+                              failwith "The number of arguments is less then formals."
+                          | h :: t ->
+                              h :: (sublist t (i + 1))
+                        )
+                      in
+                      sublist args_v 0
+                    else
+                      args_v
+                  in
+                  let ienv = Instantiation.mk_ienv tenv scope (fun_params callee_desc) args_v' end_heap heap'' in
+                  (*let () = L.progress "# Start composition.\n@." in*)
+                  let start_gettimeofday = Unix.gettimeofday () in
+                  let heap''' = Instantiation.comp_heap heap'' heap'' end_heap ienv in
+                  (*let () = print_to_file heap'' end_heap heap''' ienv in
+                  let () = Caml.List.iter (fun arg_v -> L.progress "ARG: %a\n@." Val.pp arg_v) args_v' in 
+                  let () = L.progress "#Instantiation: HeapSize Changed ((%d + %d) -> %d)\n@." (Heap.size heap'') (Heap.size end_heap) (Heap.size heap''') in
+                  let _ = read_line () in*)
+                  let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
+                  let logs' = Instantiation.comp_log cs logs end_logs heap''' ienv in
+                  let end_gettimeofday = Unix.gettimeofday () in
+                  (*let () = L.progress "\tDone: %f\n@." (end_gettimeofday -. start_gettimeofday) in*)
+                  let ret_addr = Loc.mk_ret_of_pname callee_pname in
+                  let heap'''' = 
+                    (match Heap.find_opt ret_addr heap''' with
+                    | Some v -> 
+                        Heap.add lhs_addr v (Heap.remove ret_addr heap''')
+                    | None -> (* kind of passing parameter as a return value *)
+                        let ret_param_addr = VVar.of_string "__return_param" ~proc:scope |> Loc.mk_explicit in
+                        (match Heap.find_opt ret_param_addr heap''' with
+                        | Some v ->
+                            Heap.add lhs_addr v (Heap.remove ret_param_addr heap''')
+                        | None ->
+                            heap''' ))
+                  in
+                  mk_domain heap'''' logs'
+                | None -> 
+                    (*let () = L.progress "Not existing callee. Just ignore this call.\n@." in*)
+                    mk_domain heap logs
+                    )
+              else
+                mk_domain heap logs
           | None -> 
               (*let () = L.progress "Not existing callee (empty declaration). Just ignore this call.\n@." in*)
               mk_domain heap logs)
@@ -470,6 +481,9 @@ module Analyzer = AbstractInterpreter.MakeWTO (TransferFunctions)
 let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
     let proc_name = Procdesc.get_proc_name proc_desc in
     if AnalysisTargets.is_targeted proc_name then (
+      (if (Typ.Procname.to_string proc_name) = "JavaCPP_getClass" then
+        debug := true
+      );
         let () = L.progress "Analyzing a function %s\n@." (Typ.Procname.to_string proc_name) in
         let () = L.progress "ATTRIBUTE:\n%a\n@." ProcAttributes.pp (Procdesc.get_attributes proc_desc) in
         let heap = Initializer.init tenv proc_desc in

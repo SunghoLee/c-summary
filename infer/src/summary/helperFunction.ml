@@ -43,13 +43,33 @@ let ( + ) lhs rhs = Val.union lhs rhs
 (* Cartesian product *)
 let ( * ) x y = Caml.List.concat (Caml.List.map (fun x -> Caml.List.map (fun y -> x, y) (Val.elements y)) (Val.elements x))
 
+let rec has_arbitrary_arr_index_gb (loc: Loc.t) =
+  match loc with
+  | Pointer (l, _, _) ->
+      has_arbitrary_arr_index_gb l
+  | Offset (l, i) -> (
+    match i with
+    | Const _ ->
+        false
+    | _ ->
+        Loc.is_var_pointer i && Loc.is_in VVar.glob_scope l
+  )
+  | _ -> false
+
 (* x = *y  *)
 let load v heap =
-  (fun ((loc: Loc.t), cst) v ->
-    let v' = Heap.find loc heap in
+  (fun ((loc: Loc.t), cst) (v, heap) ->
+    let v', heap' = 
+      if has_arbitrary_arr_index_gb loc then
+        let nv = Val.singleton (Loc.mk_concrete_pointer loc, Cst.cst_true) in
+        let heap' = Heap.add loc nv heap in
+        nv, heap'
+      else 
+        Heap.find loc heap, heap
+    in
     let v'' = v' ^ cst in
-    v'' + v )
-  |> (fun f -> Val.fold f v Val.empty)
+    v'' + v, heap' )
+  |> (fun f -> Val.fold f v (Val.empty, heap))
 
 (* *x = y *)
 let store lhs rhs heap =

@@ -203,6 +203,10 @@ module Loc = struct
 
   let mk_var_pointer ?dyn = mk_pointer ?dyn LocVar
 
+  let is_var_pointer = function
+  | Pointer (_, LocVar, _) -> true
+  | _ -> false
+
   let mk_fun_pointer i = FunPointer i
 
   let mk_ret i = Ret i
@@ -998,19 +1002,23 @@ module CallLogs = struct
 
   let ( < ) lhs rhs = (lhs <= rhs) && (not (equal lhs rhs))
 
-  let join = union
-
   let optimize ?scope logs = map LogUnit.optimize logs
+
+  let pure_join = union 
+
+  let join lhs rhs = pure_join (optimize lhs) (optimize rhs)
 
   let find_all ret logs = 
     (fun log -> (Loc.compare ret log.LogUnit.rloc) = 0)
     |> (fun f -> filter f logs)
 
-  let widen ~prev ~next =
-    if prev < next then (* log size is increasing *)
-      failwith (F.asprintf "we hope that logs are not increased in a loop.\n#FST: %a\n#SND: %a" pp prev pp next)
+  let widen ~prev ~next ~num_iters = 
+    let lhs = optimize prev in
+    let rhs = optimize next in
+    if lhs < rhs then (* log size is increasing *)
+      failwith (F.asprintf "we hope that logs are not increased in a loop.\n#FST: %a\n#SND: %a" pp lhs  pp rhs)
     else
-      join prev next
+      pure_join lhs rhs
 
 end
 
@@ -1051,7 +1059,7 @@ module Domain = struct
     if num_iters >= widen_iter then
       (* TODO: need to widen for loop statements *)
       { heap = Heap.widen ~prev:prev.heap ~next:next.heap
-      ; logs = CallLogs.widen ~prev:prev.logs ~next:next.logs }
+      ; logs = CallLogs.widen ~prev:prev.logs ~next:next.logs ~num_iters}
     else 
       join prev next 
 

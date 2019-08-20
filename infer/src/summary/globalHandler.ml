@@ -12,6 +12,7 @@ module GlobalStore = struct
   include Heap
 end
 
+
 let rec is_global_loc (loc: Loc.t) =
   match loc with
   | LocTop ->
@@ -51,6 +52,8 @@ let rec get_glob_pvar (expr: Exp.t) =
   match expr with
   | Lvar pvar -> 
       pvar
+  | Cast (typ, e) ->
+      get_glob_pvar e
   | Lfield (e, fn_tn, typ) -> 
       get_glob_pvar e
   | Lindex (e1, e2) -> 
@@ -58,15 +61,19 @@ let rec get_glob_pvar (expr: Exp.t) =
   | _ -> 
       failwith (F.asprintf "It does not a global variable: %a" Exp.pp expr)
 
+      (*
 let rec get_glob_pvar_opt (expr: Exp.t) =
   match expr with
   | Lvar pvar -> 
       Some pvar
+  | Cast (typ, e) ->
+      get_glob_pvar_opt e
   | Lfield (e, fn_tn, typ) -> 
       get_glob_pvar_opt e
   | Lindex (e1, e2) -> 
       get_glob_pvar_opt e1
   | _ -> None
+  *)
 
 let rec mk_dummy_heap tenv visited heap (addr, typ) = 
   if Heap.mem addr heap then
