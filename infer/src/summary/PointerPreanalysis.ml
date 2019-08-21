@@ -176,7 +176,7 @@ module TransferFunctions = struct
                     if is_primitive typ then
                       m
                     else
-                      update visited' (Domain.Loc.mk_offset param (Domain.Loc.mk_const_of_string field)) (Domain.Loc.mk_var_pointer (Domain.Loc.mk_offset arg (Domain.Loc.mk_const_of_string field))) typ  m)
+                      update visited' (Domain.Loc.mk_offset param (Domain.Loc.to_const_typ_of_string field)) (Domain.Loc.mk_var_pointer (Domain.Loc.mk_offset arg (Domain.Loc.to_const_typ_of_string field))) typ  m)
                   m'
             with _ ->
               m)
@@ -212,7 +212,7 @@ module TransferFunctions = struct
     | Lvar pvar -> 
         Domain.Loc.of_pvar ~proc:scope pvar
     | Lfield (e, fn_tn, typ) -> (* Location of a field *)
-        let field = Typ.Fieldname.to_string fn_tn |> Domain.Loc.mk_const_of_string in
+        let field = Typ.Fieldname.to_string fn_tn |> Domain.Loc.to_const_typ_of_string in
         let obj_addr = exec_expr scope e in
         let obj = Domain.Loc.mk_var_pointer obj_addr in
         Domain.Loc.mk_offset obj field

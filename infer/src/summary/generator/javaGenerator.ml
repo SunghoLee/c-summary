@@ -228,6 +228,7 @@ let solve_dependency logs =
     | x :: xs ->
       let heap = LogUnit.get_heap x in
       let x_args = LogUnit.get_args x in
+      
       let x' = List.map (H.unpack_arg heap) x_args in
       let t = find_dep None x' xs in
       let stk', unsat' = match t with

@@ -3,6 +3,7 @@ open Core
 module F = Format
 module L = Logging
 module Helper = HelperFunction
+module TH = TypeHandler
 open SUtils
 open SemanticSummaryDomain
 
@@ -103,50 +104,37 @@ let get_struct typ tenv =
         failwith ("The structure cannot be found in a type environment: " ^ (Typ.to_string typ)))
   | _ -> failwith ("this typ is not a struct type: " ^ (Typ.to_string typ))
 
+module TypSet = PrettyPrintable.MakePPSet(struct include Typ let pp = pp_full Pp.text end)
+
+let should_ignore typ visited = 
+  if JniModel.is_jni_struct typ then true (* UNSOUND: ignore JNI defined struct *)
+  else if TypSet.mem typ visited then true (* UNSOUND: ignore nested type *)
+  else if TH.is_not_allowed typ then true (* UNSOUND: ignore primitive type *)
+  else false
+  
 let mk_tmap loc_typs tenv tmap =
-  let module TypSet = PrettyPrintable.MakePPSet(struct include Typ let pp = pp_full Pp.text end) in
   let rec f visited (loc, typ) tmap =
-    if JniModel.is_jni_struct typ || TypSet.mem typ visited then tmap
+    if should_ignore typ visited then tmap
     else 
       let tmap' = TypMap.add typ loc tmap in
-      let visited' = TypSet.add typ visited in
+      let visited' = TypSet.add typ visited in 
       match typ.Typ.desc with
       | Tptr (typ', kind) ->
           f visited' ((Loc.mk_var_pointer loc), typ') tmap'
       | Tstruct name ->(
-          try
-            Helper.get_fld_and_typs name tenv
-            |> Caml.List.fold_left 
-                (fun tmap (field, typ) -> f visited' (Loc.mk_offset loc (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer)))) tmap)
-                  tmap'
-          with _ ->
-            tmap')
-      | Tarray {elt; length = Some i} -> (* fixed size arrays *)
-          (*let loc' = Loc.unwrap_ptr loc in (* C allocates array location directly to variable address *)
-          let index = (IntLit.to_int_exn i) - 1 in
-          let rec mk_array = fun i tmap -> (
-            if i = -1 then tmap
-            else
-              f struct_typs (Loc.mk_offset loc' (Loc.mk_const_of_z (Z.of_int i)), (Typ.mk (Tptr (elt, Pk_pointer)))) tmap
-              |> mk_array (i - 1))
-          in
-          mk_array index tmap*)
-          tmap
-      | Tint _ -> (* ignore non-pointer types *)
-          tmap
-      | Tfloat _ -> (* ignore non-pointer types *)
-          tmap
-      | Tfun _ -> (* ignore non-pointer types *)
-          tmap 
-      | Tvoid -> (* ignore non-pointer types *)
-          tmap
+          match Helper.get_fld_and_typs_opt name tenv with
+          | Some lst ->
+              let mk_offset field = Loc.mk_offset loc (Loc.to_const_typ_of_string field) in
+              Caml.List.fold_left (fun tmap (field, typ) -> f visited' (mk_offset field, TH.lift_typ typ) tmap) tmap' lst 
+          | None -> 
+              tmap
+      )
       | _ ->
-          failwith (F.asprintf "not support type: %a: %a." Loc.pp loc (Typ.pp_full Pp.text) typ)
+          tmap
   in
   Caml.List.fold_right (f TypSet.empty) loc_typs tmap
 
 let init_heap ~this ~do_array loc_typs tenv heap tmap = (* loc_types: local list *)
-  let module TypSet = PrettyPrintable.MakePPSet(struct include Typ let pp = pp_full Pp.text end) in
   let is_gt l1 l2 = (Loc.compare l1 l2) = 1 in
   let pos_aliases addr typ tmap =
     TypMap.find typ tmap ~default:LocSet.empty
@@ -176,7 +164,7 @@ let init_heap ~this ~do_array loc_typs tenv heap tmap = (* loc_types: local list
   let rec iter_loc visited base_cst heap (addr, typ) = 
     (* base_cst: inherited constraint *)
     if JniModel.is_jni_env_for_c typ then JniModel.put_jni_env_modeling addr heap
-    else if JniModel.is_jni_struct typ || TypSet.mem typ visited then heap
+    else if should_ignore typ visited then heap
     else 
       let desc = typ.Typ.desc in
       let visited' = TypSet.add typ visited in
@@ -194,30 +182,16 @@ let init_heap ~this ~do_array loc_typs tenv heap tmap = (* loc_types: local list
           in
           let new_cst = mk_new_base_cst base_cst ptr_loc pos_a in
           iter_loc visited' new_cst heap' (ptr_loc, ptr_typ)
-      | Tstruct name -> (
-        if not this then
-          try
-            Helper.get_fld_and_typs name tenv
-            |> Caml.List.fold_left
-                (fun heap (field, typ) ->
-                  iter_loc visited' base_cst heap (Loc.mk_offset addr (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap 
-          with _ ->
-            heap
-        else
-          heap)
-      | Tarray {elt; length = Some i} -> (* fixed size arrays *)
-          if do_array then
-            let loc' = addr in (*Loc.unwrap_ptr addr in*) (* C allocates array location directly to variable address *)
-            let index = (IntLit.to_int_exn i) - 1 in
-            let rec mk_array i heap = 
-              if i = -1 then heap
-              else
-                iter_loc visited base_cst heap (Loc.mk_offset loc' (Loc.mk_const_of_z (Z.of_int i)), (Typ.mk (Tptr (elt, Pk_pointer)))) 
-                |> mk_array (i - 1)
-            in
-            mk_array index heap
-          else
-            heap
+      | Tstruct name ->(
+          match Helper.get_fld_and_typs_opt name tenv with
+          | Some lst ->
+              let mk_offset field = Loc.mk_offset addr (Loc.to_const_typ_of_string field) in
+              Caml.List.fold_left (fun heap (field, typ) ->
+                iter_loc visited' base_cst heap (mk_offset field, TH.lift_typ typ))
+                heap lst
+          | None -> 
+              heap
+      )
       | _ -> 
           heap
   in
@@ -233,6 +207,7 @@ let init tenv pdesc =
     | None ->
         Heap.empty)
   else 
+    let _ = Caml.List.iter (fun (arg, typ) -> let _ = TH.is_finally_primitive typ in L.progress "%s:%a\n@." (Mangled.to_string arg) (Typ.pp_full Pp.text) typ) (Procdesc.get_formals pdesc) in
     let arg_vars = (Caml.List.map
       (fun (arg, typ) -> (VVar.of_string (Mangled.to_string arg) ~proc:scope, typ))
       (Procdesc.get_formals pdesc)) 

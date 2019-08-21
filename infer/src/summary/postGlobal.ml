@@ -122,6 +122,59 @@ let remove_simple_extension gs =
   in
   GH.GlobalStore.fold f gs GH.GlobalStore.empty
 
+let find_base target_loc gs = 
+  let rec impl (loc: Loc.t) v locs =
+    match loc with
+    | Offset (base, i) when target_loc = base -> 
+        LocSet.add loc locs
+    | Offset (base, i) when target_loc <> base ->
+        impl base v locs
+    | Pointer (base, _, _) -> 
+        impl base v locs
+    | _ -> 
+        locs
+  in
+  GH.GlobalStore.fold impl gs LocSet.empty
+
+let calc_top_alias iloc gs =
+  let lift_all f locs = LocSet.map f locs in
+  let rec impl (loc: Loc.t) locs =
+    match loc with 
+    | Offset (base, ConstTop) ->
+        LocSet.union (find_base base gs) locs
+    | Pointer (base, t, b) -> 
+        let locs' = impl base locs in 
+        lift_all (fun l -> Loc.mk_pointer ~dyn:b t l) locs'
+    | Offset (base, i) ->
+        let locs' = impl base locs in
+        lift_all (fun l -> Loc.mk_offset base i) locs'
+    | _ -> 
+        locs
+  in
+  impl iloc LocSet.empty
+
+let rec mk_top (loc: Loc.t) =
+  match loc with 
+  | Pointer (base, t, b) -> 
+      Loc.mk_pointer ~dyn:b t (mk_top base)
+  | Offset (base, i) ->
+      let loc' = mk_top base in
+      Loc.mk_offset base (Loc.const_typ_top)
+  | _ -> 
+      loc
+
+let handle_top igs = 
+  let impl loc v gs =
+    let tloc = mk_top loc in
+    if tloc <> loc then
+      let alias = calc_top_alias tloc igs in
+      let nv = LocSet.fold (fun l acc -> Val.union (GH.GlobalStore.find l igs) acc) alias Val.empty in
+      GH.GlobalStore.add tloc nv gs
+    else
+      gs
+  in
+  GH.GlobalStore.fold impl igs igs
+
 
 let print_all () =
   let all_procs = get_all_procs () in
@@ -148,12 +201,13 @@ let _  =
   let all_procs = get_all_procs () in
   let summs = get_summaries all_procs in
   let gs = collect_all_store summs in
-  let gs' = lift gs in
-  let ilocs = collect_implicit_locs gs' in
-  let summs' = replace gs' summs in
+  let gs' = handle_top gs in
+  let gs'' = lift gs' in
+  let ilocs = collect_implicit_locs gs'' in
+  let summs' = replace gs'' summs in
   update_summaries summs';
   print_all();
-  print_gs gs';
+  print_gs gs'';
   ;
   IOModule.store_glocs ilocs
 

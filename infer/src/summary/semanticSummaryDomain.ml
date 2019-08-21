@@ -111,13 +111,14 @@ module Loc = struct
   | Const of const_type
   | Pointer of t * ptr_typ * bool (* bool is for weak update *)
   | FunPointer of Typ.Procname.t
-  | Offset of t * t
+  | Offset of t * const_type
   | Ret of string
   [@@deriving compare]
 
   and const_type = 
   | Z of Z.t
   | String of string
+  | ConstTop
   [@@deriving compare]
 
   let rec pp fmt = function
@@ -127,11 +128,12 @@ module Loc = struct
     | Const i -> F.fprintf fmt "CONST#%a" pp_const i
     | Pointer (p, typ, b) -> F.fprintf fmt "*(%a, %d, %b)" pp p (match typ with ConcreteLoc -> 1 | _ -> 2) b
     | FunPointer p -> F.fprintf fmt "FN#%s" (Typ.Procname.to_string p)
-    | Offset (l, i) -> F.fprintf fmt "%a@%a" pp l pp i
+    | Offset (l, i) -> F.fprintf fmt "%a@%a" pp l pp_const i
     | Ret s -> F.fprintf fmt "RET#%s" s
   and pp_const fmt = function
     | Z i -> F.fprintf fmt "%a" Z.pp_print i
     | String s -> F.fprintf fmt "%s" s
+    | ConstTop -> F.fprintf fmt "TOP"
 
   let klimit = 10
 
@@ -153,6 +155,33 @@ module Loc = struct
   | Ret _ ->
       1
 
+let rec is_global_loc (loc: t) =
+  match loc with
+  | LocTop ->
+      false
+  | Explicit v ->
+      VVar.is_global v
+  | Implicit _ -> 
+      false
+  | Const _ ->
+      false
+  | Pointer (a, b, c) ->
+      is_global_loc a
+  | FunPointer _ ->
+      false
+  | Offset (a, b) ->
+      is_global_loc a
+  | Ret _ ->
+      false
+
+  let to_const_typ_of_string s = String s
+
+  let to_const_typ_of_z z = Z z
+
+  let const_typ_top = ConstTop
+
+  let is_const_top = function ConstTop -> true | _ -> false
+
   let is_top = function LocTop -> true | _ -> false
 
   let is_temporal = function Explicit v -> VVar.is_temporal v | _ -> false
@@ -162,6 +191,8 @@ module Loc = struct
   let is_implicit = function Implicit _ -> true | _ -> false
 
   let is_const = function Const _ -> true | _ -> false
+
+  let strip_const = function Const i -> i | _ -> failwith "It is not a constant"
 
   let is_numeric_const = function Const i -> (match i with Z _ -> true | _ -> false) | _ -> false
 
@@ -262,6 +293,10 @@ module Loc = struct
 
   let rec leq_const lhs rhs =
     match lhs, rhs with
+    | _, ConstTop -> 
+        true
+    | ConstTop, _ -> 
+        false
     | Z lhs_int, Z rhs_int ->
         Z.(lhs_int = rhs_int)
     | String lhs_str, String rhs_str ->
@@ -286,7 +321,7 @@ module Loc = struct
     | FunPointer lhs_ptr, FunPointer rhs_ptr ->
         (Typ.Procname.compare lhs_ptr rhs_ptr) = 0
     | Offset (lhs_loc, lhs_index), Offset (rhs_loc, rhs_index) ->
-        (lhs_loc <= rhs_loc) && (lhs_index <= rhs_index)
+        (lhs_loc <= rhs_loc) && (leq_const lhs_index rhs_index)
     | Ret lhs_ret, Ret rhs_ret ->
         String.equal lhs_ret rhs_ret
     | _, _ ->
@@ -698,8 +733,13 @@ module Heap = struct
     | Some v ->
         v
     | None ->
-        Val.empty
+        if Loc.is_global_loc l then
+          Val.singleton (Loc.mk_concrete_pointer l, Cst.cst_true)
+        else
+          Val.empty
 
+  let strong_update l v heap = add l v heap
+     
   let add l v heap =
     if l = (Loc.mk_const_of_z Z.zero) then
       heap
@@ -1051,8 +1091,9 @@ module Domain = struct
   let update_logs logs' s = { s with logs = logs' }
 
   let ( <= ) ~lhs ~rhs = 
-    Heap.( lhs.heap <= rhs.heap ) 
-    && CallLogs.( lhs.logs <= rhs.logs )
+    (*Heap.( lhs.heap <= rhs.heap ) 
+    && CallLogs.( lhs.logs <= rhs.logs )*)
+    CallLogs.( lhs.logs <= rhs.logs )
 
   let join lhs rhs = 
     { heap = ( Heap.join lhs.heap rhs.heap )

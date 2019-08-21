@@ -10,27 +10,9 @@ module TypSet = PrettyPrintable.MakePPSet(struct include Typ let pp = pp_full Pp
 
 module GlobalStore = struct
   include Heap
+  let add = strong_update
 end
 
-
-let rec is_global_loc (loc: Loc.t) =
-  match loc with
-  | LocTop ->
-      false
-  | Explicit v ->
-      VVar.is_global v
-  | Implicit _ -> 
-      false
-  | Const _ ->
-      false
-  | Pointer (a, b, c) ->
-      is_global_loc a
-  | FunPointer _ ->
-      false
-  | Offset (a, b) ->
-      is_global_loc a
-  | Ret _ ->
-      false
 
       (*
 let rec mk_dummy_loc (expr: Exp.t) = 
@@ -90,8 +72,9 @@ let rec mk_dummy_heap tenv visited heap (addr, typ) =
         HelperFunction.get_fld_and_typs name tenv
         |> Caml.List.fold_left
             (fun heap (field, typ) ->
-              mk_dummy_heap tenv visited' heap (Loc.mk_offset addr (Loc.mk_const_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap )
+              mk_dummy_heap tenv visited' heap (Loc.mk_offset addr (Loc.to_const_typ_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap )
     | Tarray {elt; length = Some i} -> (* fixed size arrays *)
+        (*
         let loc' = addr in(*Loc.unwrap_ptr addr in*) (* C allocates array location directly to variable address *)
         let index = (IntLit.to_int_exn i) - 1 in
         let rec mk_array i heap = 
@@ -100,7 +83,8 @@ let rec mk_dummy_heap tenv visited heap (addr, typ) =
             mk_dummy_heap tenv visited heap (Loc.mk_offset loc' (Loc.mk_const_of_z (Z.of_int i)), (Typ.mk (Tptr (elt, Pk_pointer)))) 
             |> mk_array (i - 1)
         in
-        mk_array index heap
+        mk_array index heap*)
+        heap
     | _ -> 
         heap
 
@@ -137,7 +121,7 @@ let remove_simple_extension gs =
 
 let collect_global_store (h: Heap.t) =
   Heap.fold (fun l v acc ->
-    if is_global_loc l then
+    if Loc.is_global_loc l then
       GlobalStore.add l v acc
     else 
       acc) h GlobalStore.empty

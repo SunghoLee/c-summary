@@ -3,6 +3,7 @@ open Core
 module F = Format
 module L = Logging
 module Sem = SemanticFunctions
+module TH = TypeHandler
 open SemanticSummaryDomain
 open SUtils
 
@@ -105,8 +106,9 @@ module TransferFunctions = struct
         failwith (F.asprintf "TTTTTTTTTTTTTTTTTTTTTTTTTTT: %a" (Pvar.pp Pp.text) glob_pvar)
 
 
-  (*let get_global_pvar_and_typ_opt e =
-    match GH.get_glob_pvar_opt e with
+  let get_global_pvar_and_typ_opt e =
+    try Some (get_global_pvar_and_typ e) with _ -> None
+    (*match GH.get_glob_pvar_opt e with
     | None -> None
     | Some glob_pvar ->
       let all_globals = GlobalEnv.internal_get_glob_pvars () in
@@ -120,9 +122,6 @@ module TransferFunctions = struct
       Domain.make heap logs
 
   let rec get_proc_summary ?caller do_clear callee_name = 
-    Ondemand.clear_cache ();
-    (*let () = L.progress "Request summary of %s\n@." (Typ.Procname.to_string callee_name) in*)
-    let () = AnalysisTargets.add_target callee_name in
     let sum = 
       match caller with
       | Some s -> (
@@ -131,24 +130,10 @@ module TransferFunctions = struct
           Ondemand.analyze_proc_name callee_name)
     in
     match sum with
-    | Some s -> (
-        match s.Summary.payloads.Payloads.semantic_summary with
-        | Some _ as o -> 
-            o
-        | None -> (
-            if do_clear then (
-              match Ondemand.get_proc_desc callee_name with
-              | Some callee_pdesc -> (
-                  let _ = Summary.reset callee_pdesc in
-                  Ondemand.clear_cache ();
-                  get_proc_summary ?caller false callee_name)
-              | None ->
-                  None)
-            else
-              None))
+    | Some s -> 
+        s.Summary.payloads.Payloads.semantic_summary
     | None -> 
         None
-
 
   let rec exec_expr scope location heap (expr: Exp.t) = 
       match expr with
@@ -156,11 +141,13 @@ module TransferFunctions = struct
           let loc = Loc.of_id i ~proc:scope in
           Heap.find loc heap
       | UnOp (op, e, typ) ->
-          let loc = Loc.mk_implicit (Location.to_string location) in
-          Val.singleton (loc, Cst.cst_true)
+          Val.empty
+          (*let loc = Loc.mk_implicit (Location.to_string location) in
+          Val.singleton (loc, Cst.cst_true)*)
       | BinOp (op, e1, e2) -> 
-          let loc = Loc.mk_implicit (Location.to_string location) in
-          Val.singleton (loc, Cst.cst_true)
+          Val.empty
+          (*let loc = Loc.mk_implicit (Location.to_string location) in
+          Val.singleton (loc, Cst.cst_true)*)
       | Exn typ ->
           (* do not handle exceptions *)
           Val.empty
@@ -170,8 +157,9 @@ module TransferFunctions = struct
           (* only handle string and integer constants *)
           (match c with
           | Cint s -> 
-              let loc = IntLit.to_big_int s |> Loc.mk_const_of_z in
-              Val.singleton (loc, Cst.cst_true)
+              Val.empty
+              (*let loc = IntLit.to_big_int s |> Loc.mk_const_of_z in
+              Val.singleton (loc, Cst.cst_true)*)
           | Cfun fn ->
               Val.singleton (Loc.mk_fun_pointer fn, Cst.cst_true)
           | Cstr s -> 
@@ -188,35 +176,23 @@ module TransferFunctions = struct
           let loc = Loc.of_pvar ~proc:scope pvar in
           Val.singleton (loc, Cst.cst_true)
       | Lfield (e, fn_tn, typ) -> (* Location of a field *)
-          let field = Typ.Fieldname.to_string fn_tn |> Loc.mk_const_of_string in
+          let field = Typ.Fieldname.to_string fn_tn |> Loc.to_const_typ_of_string in
           let obj_addr_v = exec_expr scope location heap e in
-          let obj_v = Val.fold
-            (fun (obj_addr, obj_addr_cst) v -> Helper.(((Heap.find obj_addr heap) ^ obj_addr_cst) + v))
-            obj_addr_v Val.empty
-          in
-          let res = Val.fold (fun (obj_loc, obj_cst) vals -> 
-            if not (Loc.is_const obj_loc) then
-              Val.add (Loc.mk_offset obj_loc field, obj_cst) vals
-            else vals)
-          obj_v Val.empty in
-            res
-          (*Val.map (fun (obj_loc, obj_cst) -> Loc.mk_offset obj_loc field, obj_cst) obj_v*)
-      | Lindex (e1, e2) -> (* &(e1[e2]) *)
-          let index_v = exec_expr scope location heap e2 in (* value of e2 *)
+          let obj_v = Helper.load obj_addr_v heap in
+          Val.map (fun (l, cst) -> Loc.mk_offset l field, cst) obj_v
+      | Lindex (e1, Const (Cint s)) -> (* &(e1[e2]) *)
+          let index = IntLit.to_big_int s |> Loc.mk_const_of_z in
           let arr_addr_v = exec_expr scope location heap e1 in (* address of e1 *)
-          let arr_v = Val.fold
-            (fun (arr_addr, arr_addr_cst) v -> Helper.(((Heap.find arr_addr heap) ^ arr_addr_cst) + v)) (* value of e1 *)
-            arr_addr_v Val.empty
-          in
-          let arr_index_pair = Helper.(arr_v * index_v) in (* all the pairs of e1 val and e2 val *)
-          let res = Caml.List.fold_right
-            (fun ((arr_loc, arr_cst), (index_loc, index_cst)) v -> (* loc of e1[e2] *)
-              Helper.(v + Val.singleton ((Loc.mk_offset arr_loc index_loc), Cst.cst_and arr_cst index_cst)))
-            arr_index_pair Val.empty in
-            res
+          let arr_v = Helper.load arr_addr_v heap in
+          Val.map (fun (l, cst) -> Loc.mk_offset l (Loc.strip_const index), cst) arr_v
+      | Lindex (e1, _) -> (* &(e1[e2]) *)
+          let arr_addr_v = exec_expr scope location heap e1 in (* address of e1 *)
+          let arr_v = Helper.load arr_addr_v heap in
+          Val.map (fun (l, cst) -> Loc.mk_offset l Loc.const_typ_top, cst) arr_v
       | Sizeof data -> 
+          Val.empty
           (* TODO: Calculate the size of data *)
-          Val.singleton (Loc.mk_const_of_z Z.one, Cst.cst_true)
+          (*Val.singleton (Loc.mk_const_of_z Z.one, Cst.cst_true)*)
           (* AVS.singleton (Val.of_int (Int.top), Cst.cst_true) *)
 
     let calc_args tenv scope location heap args =
@@ -224,10 +200,19 @@ module TransferFunctions = struct
           (fun (h, vlist) ((arg: Exp.t), _) -> (
             match arg with
             | Lvar pvar when Pvar.is_global pvar (*when Pvar.is_compile_constant pvar || Pvar.is_ice pvar*) -> (
-                let (glob_pvar, glob_typ) = get_global_pvar_and_typ arg in
-                let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
-                let glob_addr = exec_expr scope location heap' arg in
-                heap', (glob_addr :: vlist))
+                match get_global_pvar_and_typ_opt arg with
+                | Some (glob_pvar, glob_typ) -> 
+                    let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+                    let glob_addr = exec_expr scope location heap' arg in
+                    heap', (glob_addr :: vlist)
+                | None -> 
+                    heap, (exec_expr scope location heap arg) :: vlist)
+
+                    (*
+                    let (glob_pvar, glob_typ) = get_global_pvar_and_typ arg in
+                    let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+                    let glob_addr = exec_expr scope location heap' arg in
+                    heap', (glob_addr :: vlist))*)
             | _ ->
                 h, exec_expr scope location heap arg :: vlist))
           (heap, []) args
@@ -253,13 +238,28 @@ module TransferFunctions = struct
       let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
       let scope = VVar.mk_scope proc_name in
       match instr with
+      | Load (id, e1, typ, loc) when TH.is_not_allowed typ -> ( (* Handling load for global variables *)
+          mk_domain heap logs
+      )
       | Load (id, e1, typ, loc) when GH.is_global e1 -> ( (* Handling load for global variables *)
           let lhs_addr = Loc.of_id id ~proc:scope in
+          (match get_global_pvar_and_typ_opt e1 with
+          | Some (glob_pvar, glob_typ) -> 
+              let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+              let glob_v = exec_expr scope loc heap' e1 |> (fun x -> Helper.load x heap') in
+              let heap'' = Heap.add lhs_addr glob_v heap' in
+              mk_domain heap'' logs
+          | None -> 
+              let rhs_v = exec_expr scope loc heap e1 |> (fun x -> Helper.load x heap) in
+              let heap' = Heap.add lhs_addr rhs_v heap in
+              mk_domain heap' logs)
+              
+      (*
           let (glob_pvar, glob_typ) = get_global_pvar_and_typ e1 in
           let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
           let glob_v, heap'' = exec_expr scope loc heap' e1 |> (fun x -> Helper.load x heap') in
           let heap''' = Heap.add lhs_addr glob_v heap'' in
-          mk_domain heap''' logs
+          mk_domain heap''' logs*)
       )
 
       | Load (id, e1, typ, loc) when JniModel.is_jni_env_ptr_for_c typ -> 
@@ -273,9 +273,12 @@ module TransferFunctions = struct
 
       | Load (id, e1, typ, loc) -> 
           let lhs_addr = Loc.of_id id ~proc:scope in
-          let rhs_v, heap' = exec_expr scope loc heap e1 |> (fun x -> Helper.load x heap) in
-          let heap'' = Heap.add lhs_addr rhs_v heap' in
-          mk_domain heap'' logs
+          let rhs_v = exec_expr scope loc heap e1 |> (fun x -> Helper.load x heap) in
+          let heap' = Heap.add lhs_addr rhs_v heap in
+          mk_domain heap' logs
+
+      | Store (Lvar pvar, typ, e2, loc) when TH.is_not_allowed typ -> (* for return statements *)
+          mk_domain heap logs
 
       | Store (Lvar pvar, typ, e2, loc) when Pvar.is_return pvar -> (* for return statements *)
           let rhs_v = exec_expr scope loc heap e2 in
@@ -285,6 +288,21 @@ module TransferFunctions = struct
           mk_domain heap' logs
 
       | Store (e1, typ, e2, loc) when GH.is_global e2 -> ( (* Handling load for global variables *)
+          (match get_global_pvar_and_typ_opt e2 with
+          | Some (glob_pvar, glob_typ) -> 
+              let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+              let lhs_v = exec_expr scope loc heap' e1 in
+              let rhs_v = exec_expr scope loc heap' e2 in
+              let heap'' = Helper.store lhs_v rhs_v heap' in
+              let res = mk_domain heap'' logs in
+              res
+          | None -> 
+              let lhs_v = exec_expr scope loc heap e1 in
+              let rhs_v = exec_expr scope loc heap e2 in
+              let heap' = Helper.store lhs_v rhs_v heap in
+              let res = mk_domain heap' logs in
+              res)
+          (*
           let (glob_pvar, glob_typ) = get_global_pvar_and_typ e2 in
           let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
           let lhs_v = exec_expr scope loc heap' e1 in
@@ -292,16 +310,32 @@ module TransferFunctions = struct
           let heap'' = Helper.store lhs_v rhs_v heap' in
           let res = mk_domain heap'' logs in
           res
+          *)
       )
 
       | Store (e1, typ, e2, loc) when GH.is_global e1 -> ( (* Handling load for global variables *)
+          (match get_global_pvar_and_typ_opt e1 with
+          | Some (glob_pvar, glob_typ) -> 
+              let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
+              let lhs_v = exec_expr scope loc heap' e1 in
+              let rhs_v = exec_expr scope loc heap' e2 in
+              let heap'' = Helper.store lhs_v rhs_v heap' in
+              let res = mk_domain heap'' logs in
+              res
+          | None -> 
+              let lhs_v = exec_expr scope loc heap e1 in
+              let rhs_v = exec_expr scope loc heap e2 in
+              let heap' = Helper.store lhs_v rhs_v heap in
+              let res = mk_domain heap' logs in
+              res)
+          (*
           let (glob_pvar, glob_typ) = get_global_pvar_and_typ e1 in
           let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
           let lhs_v = exec_expr scope loc heap' e1 in
           let rhs_v = exec_expr scope loc heap' e2 in
           let heap'' = Helper.store lhs_v rhs_v heap' in
           let res = mk_domain heap'' logs in
-          res
+          res*)
       )
 
       | Store (e1 , typ, e2, loc) -> 

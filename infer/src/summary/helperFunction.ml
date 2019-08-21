@@ -20,6 +20,8 @@ let get_fld_and_typs name tenv =
   |> ((fun pairs (n, ftyp, _) -> (Typ.Fieldname.to_string n, ftyp) :: pairs) 
     |> (fun f -> Caml.List.fold_left f []))
 
+let get_fld_and_typs_opt name tenv = try Some (get_fld_and_typs name tenv) with _ -> None
+  
 let find_field_typ: String.t -> Typ.Struct.fields -> Typ.t = 
   fun name fields ->
     let rec iter_field : (Typ.Fieldname.t * Typ.t * Annot.Item.t) list -> Typ.t = 
@@ -43,37 +45,13 @@ let ( + ) lhs rhs = Val.union lhs rhs
 (* Cartesian product *)
 let ( * ) x y = Caml.List.concat (Caml.List.map (fun x -> Caml.List.map (fun y -> x, y) (Val.elements y)) (Val.elements x))
 
-let rec has_arbitrary_arr_index_gb (loc: Loc.t) =
-  match loc with
-  | Pointer (l, _, _) ->
-      has_arbitrary_arr_index_gb l
-  | Offset (l, i) -> (
-    match i with
-    | Const _ ->
-        false
-    | _ ->
-        Loc.is_var_pointer i && Loc.is_in VVar.glob_scope l
-  )
-  | _ -> false
-
 (* x = *y  *)
 let load v heap =
-  (fun ((loc: Loc.t), cst) (v, heap) ->
-    let v', heap' = 
-      (match Heap.find_opt loc heap with
-      | None -> 
-          if has_arbitrary_arr_index_gb loc then
-            let nv = Val.singleton (Loc.mk_concrete_pointer loc, Cst.cst_true) in
-            let heap' = Heap.add loc nv heap in
-            nv, heap'
-          else 
-            Val.empty, heap
-      | Some v ->
-          v, heap)
-    in
+  (fun ((loc: Loc.t), cst) v ->
+    let v' = Heap.find loc heap in
     let v'' = v' ^ cst in
-    v'' + v, heap' )
-  |> (fun f -> Val.fold f v (Val.empty, heap))
+    v'' + v )
+  |> (fun f -> Val.fold f v Val.empty)
 
 (* *x = y *)
 let store lhs rhs heap =
@@ -89,7 +67,7 @@ let store lhs rhs heap =
     let new_v = rhs ^ cst in
     let merged_v = pre_v' + new_v in
     Heap.add loc merged_v heap 
-    |> Heap.add (Loc.mk_offset loc (Loc.mk_const_of_z Z.zero)) merged_v (* special handling for array: *array = array[0] *)
+    |> Heap.add (Loc.mk_offset loc (Loc.to_const_typ_of_z Z.zero)) merged_v (* special handling for array: *array = array[0] *)
   in
   Val.fold f lhs heap
 

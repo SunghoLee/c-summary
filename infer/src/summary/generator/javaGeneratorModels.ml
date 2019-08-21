@@ -35,6 +35,11 @@ module ModelHelper = struct
       | VVar.Global -> "G" in
     kind' ^ proc' ^ "$" ^ name
 
+  let simple_destruct_const_typ = function
+    | Loc.String s -> "\"" ^ String.escaped s ^ "\""
+    | Loc.Z z -> Z.to_string z
+    | Loc.ConstTop -> "__T"
+
   (* destruct Loc.t and make flat string *)
   let rec simple_destruct_loc' glocs loc = match loc with
     | Loc.Explicit v -> "ex$$" ^ string_of_var v
@@ -43,13 +48,11 @@ module ModelHelper = struct
         then encode_global_full_name s
         else "im$$" ^ encode_name s
     | Loc.Const v ->
-      (match v with
-         | Loc.Z i -> Z.to_string i
-         | Loc.String s -> "\"" ^ String.escaped s ^ "\"")
+        simple_destruct_const_typ v
     | Loc.Pointer (p, _, _) -> "ptr$$" ^ simple_destruct_loc' glocs p
     | Loc.FunPointer p -> "fp$$" ^ InferIR.Typ.Procname.to_string p
     | Loc.Offset (u, v) ->
-      "off$$" ^ simple_destruct_loc' glocs u ^ "$" ^ simple_destruct_loc' glocs v
+      "off$$" ^ simple_destruct_loc' glocs u ^ "$" ^ simple_destruct_const_typ v
     | Loc.Ret s -> "ret$$" ^ s
     | _ -> "UNEX"
   (* destruct Val.t and make flat string *)
@@ -281,6 +284,17 @@ module ModelHelper = struct
         | [] -> loc
         | (l, c) :: xs -> l)
     | _ -> loc
+    
+  let unpack_arg' heap loc = match loc with
+    | Loc.Implicit t -> (match Heap.find_opt loc heap with
+      | None -> [loc]
+      | Some x ->
+        let t = Val.filter (fun (l,cst) -> not (Loc.is_numeric_const l)) x 
+        |> Val.elements in
+        match t with
+        | [] -> [loc]
+        | _ -> List.map (fun (x, y) -> x) t)
+    | _ -> [loc]
 
   (* box given type if possible *)
   let box_type = function
@@ -405,7 +419,7 @@ module SimpleModel : GeneratorModel = struct
   (* return of jni function *)
   type java_val =
   | JUnknown
-  | JClass of Y.typ
+  | JClass of Y.typ list
            (* cls *)
   | JMethod of Y.typ option * Y.ident * Y.typ list * Y.typ
             (* cls          * name   * args type  * ret type *)
@@ -425,6 +439,13 @@ module SimpleModel : GeneratorModel = struct
                       v_name = Y.ident name 0}) in
       Y.LocalVar (Y.({f_var = f_var;
                       f_init = Some (ExprInit init_val)}))
+
+  let mk_defvar typ name =
+    let f_var = Y.({v_mods = [];
+                    v_type = typ;
+                    v_name = Y.ident name 0}) in
+    Y.LocalVar (Y.({f_var = f_var;
+                    f_init = None}))
 
   let get_this_expr proc = match ProcInfo.get_kind proc with
     | Static _ -> Y.Literal "__JNI.ThisClass()"
@@ -487,44 +508,47 @@ module SimpleModel : GeneratorModel = struct
       else res
     in Val.fold f v top
 
-  let handle_register_natives state glocs heap stk cls mths n =
+  let handle_register_natives state glocs heap stk cls mths =
     let l_cls = H.simple_destruct_loc' glocs cls in
     match List.assoc_opt l_cls stk with
-    | Some (JClass (Y.TypeName l)) ->
-      (match l |> List.map Y.id_string |> List.rev with
-      | [] -> ()
-      | cls' :: pkg_r ->
-        let pkg = List.rev pkg_r in
-        let box c t =
-          Loc.Offset (Loc.Pointer (t, Loc.ConcreteLoc, false), Loc.Const c) in
-        let rec g cond i =
-          if not (cond i) then ()
-          else let l_ptr = box (Loc.Z (Z.of_int i)) mths in
-               let off s = box (Loc.String s) l_ptr in
-            F.printf "RegNat: %a\n" Loc.pp (off "FIELD");
-               let find_from heap field =
-                 match Heap.find_opt (off field) heap with
-                 | None -> None
-                 | Some x -> match Val.elements x with
-                   | [l, c] -> Some l
-                   | _ -> None in
-               let handle_find_from heap =
-                 match find_from heap "fnPtr",
-                       find_from heap "signature",
-                       find_from heap "name" with
-                 | Some (Loc.FunPointer fn_ptr),
-                   Some (Loc.Const (Loc.String sign)),
-                   Some (Loc.Const (Loc.String name)) ->
-                    State.add_registered state
-                       (InferIR.Typ.Procname.to_string fn_ptr)
-                       (pkg, cls', name, Some sign);
-                    g cond (i + 1)
-                 | _ -> () in
-               handle_find_from heap in
-        match H.get_int_from_heap n heap with 
-        | None -> g (fun _ -> true) 0
-        | Some n' -> g (fun x -> x < n') 0)
-    | _ -> ()
+    | Some (JClass ls) ->
+      ls |> List.iter (fun (Y.TypeName l) ->
+        (match l |> List.map Y.id_string |> List.rev with
+        | [] -> ()
+        | cls' :: pkg_r ->
+          let pkg = List.rev pkg_r in
+          let box c t =
+            Loc.Offset (Loc.Pointer (t, Loc.ConcreteLoc, false), c) in
+          let rec g cond i =
+            if not (cond i) then ()
+            else let l_ptr = box (Loc.Z (Z.of_int i)) mths in
+                 let off s = box (Loc.String s) l_ptr in
+              F.printf "RegNat: %a\n" Loc.pp (off "FIELD");
+                 let find_from heap field =
+                   match Heap.find_opt (off field) heap with
+                   | None -> None
+                   | Some x -> match Val.elements x with
+                     | [l, c] -> Some l
+                     | _ -> None in
+                 let handle_find_from heap =
+                   match find_from heap "fnPtr",
+                         find_from heap "signature",
+                         find_from heap "name" with
+                   | Some (Loc.FunPointer fn_ptr),
+                     Some (Loc.Const (Loc.String sign)),
+                     Some (Loc.Const (Loc.String name)) ->
+                      State.add_registered state
+                         (InferIR.Typ.Procname.to_string fn_ptr)
+                         (pkg, cls', name, Some sign);
+                      g cond (i + 1)
+                   | _ -> () in
+                 handle_find_from heap in
+          (*match H.get_int_from_heap n heap with 
+          | None -> g (fun _ -> true) 0
+          | Some n' -> g (fun x -> x < n') 0)*)
+          g (fun _ -> true) 0)
+      )
+    | _ -> () 
 
   let init_stk glocs ProcInfo.{kind; formals} =
     let mk name = name, JUnknown in
@@ -544,13 +568,15 @@ module SimpleModel : GeneratorModel = struct
   (* update_stk: push class/method/field information into stack *)
   let update_stk state glocs proc stk heap rloc fn args =
     match fn, args with
-    | "FindClass", [env; cls] ->
-      (match H.get_string_from_heap cls heap with
-      | Some cls_name ->
-        let x = rloc, JClass (H.parse_class cls_name) in
-        x :: stk
-      | None -> (rloc, JUnknown) :: stk)
-    | "GetMethodID", [env; cls; name; sign] ->
+    | "FindClass", [env; cls] -> (
+        let t = List.fold_right (fun c l ->
+          (match H.get_string_from_heap c heap with
+          | Some cls_name -> H.parse_class cls_name :: l
+          | None -> l)) cls [] in
+        match t with
+        | [] -> (rloc, JUnknown) :: stk
+        | _ -> (rloc, JClass t) :: stk )
+    (*| "GetMethodID", [env; cls; name; sign] ->
       let name' = H.get_string_from_heap name heap in
       let sign' = H.get_string_from_heap sign heap in
       (match name', sign' with
@@ -575,9 +601,13 @@ module SimpleModel : GeneratorModel = struct
         let typ = H.parse_field_sig s in
         let x = rloc, JField (cls', Y.ident n 0, typ) in
         x :: stk
-      | _ -> (rloc, JUnknown) :: stk )
+      | _ -> (rloc, JUnknown) :: stk )*)
     | "RegisterNatives", [env; cls; mths; n] when ProcInfo.is_entry proc ->
-      handle_register_natives state glocs heap stk cls mths n;
+      List.iter (fun c -> 
+        List.iter (fun m ->
+          handle_register_natives state glocs heap stk c m
+        ) mths
+      ) cls;
       stk
     | _ -> (rloc, JUnknown) :: stk
 
@@ -589,25 +619,43 @@ module SimpleModel : GeneratorModel = struct
     then jni_class_name, String.sub s 8 (l - 8)
     else c_fn_class_name, s
 
+  let mk_phi glocs proc stk args =
+    let args' =
+      List.map (destruct_loc glocs proc stk) args in
+    Y.(Call (Y.Name [ident "__JNI.Phi" 0], args'))
+
+  let rec mk_all_assigns res left cur cb = match left with
+    | [] -> cb cur :: res
+    | l :: ls ->
+        List.fold_right (fun e res ->
+          mk_all_assigns res ls (e :: cur) cb) l res
+
   (* function to process each log *)
   let method_body_sub state glocs proc (lst, stk) log =
     let JF jf_name = LogUnit.get_jfun log in
     let cls, mth = jni_fn_name jf_name in
     let fn = Y.Name [Y.ident cls 0; Y.ident mth 0] in
     let heap = LogUnit.get_heap log in
-    let args = List.map (H.unpack_arg heap) (LogUnit.get_args log) in
+    let args = List.map (H.unpack_arg' heap) (LogUnit.get_args log) in
     let args' = args
       |> List.tl
-      |> List.map (destruct_loc glocs proc stk) in
+      |> List.map (List.map (destruct_loc glocs proc stk)) in
     let ret = LogUnit.get_rloc log
       |> H.simple_destruct_loc' glocs in
-    let e = Y.Call (fn, args') in
     let in_stk = List.mem_assoc ret stk in
-    let s = match H.get_jni_ret_type mth with
-      | None -> mk_assign None ret e
-      | Some t -> mk_assign (Some (if in_stk then Y.TypeName [Y.ident "" 0] else t)) ret e in
+    let lst' = (match H.get_jni_ret_type mth with
+      | None -> lst
+      | Some t -> if in_stk
+        then lst
+        else mk_defvar t ret :: lst) in
+    let mk_a = mk_assign (
+      match H.get_jni_ret_type mth with
+      | None -> None
+      | Some _ -> (Some (Y.TypeName [Y.ident "" 0]))) in
+    let cb args = mk_a ret (Y.Call (fn, args)) in
+    let lst'' = mk_all_assigns lst' (List.rev args') [] cb in
     let stk' = update_stk state glocs proc stk heap ret mth args in
-    s :: lst, stk'
+    lst'', stk'
 
   (* function to generate return stmt *)
   let method_body_ret glocs proc rets heap =

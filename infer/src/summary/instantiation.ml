@@ -7,36 +7,57 @@ open SemanticSummaryDomain
 open Pervasives
 open SUtils
 
+let rec is_typed_global (loc: Loc.t) = 
+  match loc with
+  | LocTop ->
+      false
+  | Explicit v ->
+      let globals = GlobalEnv.internal_get_glob_pvars () in
+      let global_locs = Caml.List.map (fun (pvar, typ) -> (Loc.of_pvar pvar, typ)) globals in
+      (try (let _ = Caml.List.find (fun (gloc, typ) -> gloc = loc) global_locs in true) with _ -> false)
+  | Implicit _ -> 
+      false
+  | Const _ ->
+      false
+  | Pointer (a, b, c) ->
+      is_typed_global a
+  | FunPointer _ ->
+      false
+  | Offset (a, b) ->
+      is_typed_global a
+  | Ret _ ->
+      false
+
 let rec infer_global_typ (loc: Loc.t) =
   match loc with
   | LocTop ->
-      failwith (F.asprintf "It is not a global : %a" Loc.pp loc)
+      failwith (F.asprintf "[Top] It is not a global : %a" Loc.pp loc)
   | Explicit v ->
       let globals = GlobalEnv.internal_get_glob_pvars () in
       let global_locs = Caml.List.map (fun (pvar, typ) -> (Loc.of_pvar pvar, typ)) globals in
       let (_, t) = Caml.List.find (fun (gloc, typ) -> gloc = loc) global_locs in
       Typ.mk (Tptr (t, Pk_pointer))
   | Implicit _ -> 
-      failwith (F.asprintf "It is not a global : %a" Loc.pp loc)
+      failwith (F.asprintf "[Impl] It is not a global : %a" Loc.pp loc)
   | Const _ ->
-      failwith (F.asprintf "It is not a global : %a" Loc.pp loc)
+      failwith (F.asprintf "[Const] It is not a global : %a" Loc.pp loc)
   | Pointer (a, b, c) ->
       let t = infer_global_typ a in
       if Typ.is_pointer t then
         Typ.strip_ptr t
       else 
-        failwith (F.asprintf "Is not a pointer? %a: %a\n@." Loc.pp loc (Typ.pp_full Pp.text) t)
+        failwith (F.asprintf "[Pointer] Is not a pointer? %a: %a\n@." Loc.pp loc (Typ.pp_full Pp.text) t)
   | FunPointer _ ->
-      failwith (F.asprintf "It is not a global : %a" Loc.pp loc)
+      failwith (F.asprintf "[FunP] It is not a global : %a" Loc.pp loc)
   | Offset (a, b) ->(
       match (infer_global_typ a).Typ.desc with
       | Tarray {elt} ->
           elt
       | _ -> 
-          failwith (F.asprintf "It is not a global : %a" Loc.pp loc)
+          failwith (F.asprintf "[Offset] It is not a global : %a" Loc.pp loc)
   )
   | Ret _ ->
-      failwith (F.asprintf "It is not a global : %a" Loc.pp loc)
+      failwith (F.asprintf "[Ret] It is not a global : %a" Loc.pp loc)
 
 let print_progress total cur = ()
   (*
@@ -67,8 +88,8 @@ let rec expand_glob_loc tenv preloc nloc typ ienv =
         HelperFunction.get_fld_and_typs name tenv
         |> Caml.List.fold_left
             (fun ienv' (field, typ) ->
-              let noffset = Loc.mk_offset nloc (Loc.mk_const_of_string field) in
-              let poffset = Loc.mk_offset preloc (Loc.mk_const_of_string field) in
+              let noffset = Loc.mk_offset nloc (Loc.to_const_typ_of_string field) in
+              let poffset = Loc.mk_offset preloc (Loc.to_const_typ_of_string field) in
               let ienv'' = InstEnv.add poffset (Val.singleton (noffset, Cst.cst_true)) ienv' in
               expand_glob_loc tenv poffset noffset (Typ.mk (Tptr (typ, Pk_pointer))) ienv'') ienv
       with _ ->
@@ -80,8 +101,8 @@ let rec expand_glob_loc tenv preloc nloc typ ienv =
       let rec mk_array i ienv' = 
         if i = -1 then ienv'
         else
-          let noffset = Loc.mk_offset nloc (Loc.mk_const_of_z (Z.of_int i)) in
-          let poffset = Loc.mk_offset preloc (Loc.mk_const_of_z (Z.of_int i)) in
+          let noffset = Loc.mk_offset nloc (Loc.to_const_typ_of_z (Z.of_int i)) in
+          let poffset = Loc.mk_offset preloc (Loc.to_const_typ_of_z (Z.of_int i)) in
           let ienv'' = InstEnv.add poffset (Val.singleton (noffset, Cst.cst_true)) ienv' in
           expand_glob_loc tenv poffset noffset (Typ.mk (Tptr (elt, Pk_pointer))) ienv''
           |> mk_array (i - 1)
@@ -94,55 +115,25 @@ let rec expand_glob_loc tenv preloc nloc typ ienv =
 let rec fp_mk_ienv tenv caller_scope callee_heap caller_heap ienv =
   let module Cache = PrettyPrintable.MakePPMap(Loc) in
   let cache = ref Cache.empty in
+  let inst_base finst base = Val.fold (fun base_v v -> Val.union v (finst base_v)) base Val.empty in
   let rec expand ((loc: Loc.t), _) ienv =
-    try InstEnv.add loc (Cache.find loc !cache) ienv with _ ->
+    try InstEnv.add loc (Cache.find loc !cache) ienv with _ -> (
       match loc with
       | Offset (base, index) ->
-          let ienv' = expand (base, Cst.cst_true) ienv |> expand (index, Cst.cst_true) in
+          let ienv' = expand (base, Cst.cst_true) ienv in
           let ins_base = InstEnv.find base ienv' in
-          if Loc.is_const index then
-            let ins_index = Val.singleton (index, Cst.cst_true) in
-            Helper.(ins_base * ins_index) 
-            |> Caml.List.fold_left (fun ienv ((b, b_cst), (i, i_cst)) -> 
-                let v = Val.singleton (Loc.mk_offset b i, Cst.cst_and b_cst i_cst) in
-                cache := Cache.add loc v !cache;
-                InstEnv.add loc v ienv) ienv'
-          else if GlobalHandler.is_global_loc base then
-            let ins_index = InstEnv.find index ienv' in
-            let _ = L.progress "CVT: %a -> %a @@@ %a\n@." Loc.pp loc Val.pp ins_base Val.pp ins_index in
-            Helper.(ins_base * ins_index) 
-            |> Caml.List.fold_left (fun ienv' ((b, b_cst), (i, i_cst)) -> 
-                let noffset = Loc.mk_offset b i in
-                let noffset_t = infer_global_typ noffset in
-                let ienv'' = expand_glob_loc tenv loc noffset noffset_t ienv' in
-                let v = Val.singleton (noffset, Cst.cst_and b_cst i_cst) in
-                cache := Cache.add loc v !cache;
-                InstEnv.add loc v ienv'') ienv'
-          else 
-            ienv'
+          let ins_offset = inst_base (fun (b, cst) -> Val.singleton (Loc.mk_offset b index, cst)) ins_base in
+          InstEnv.add loc ins_offset ienv'
 
       | Pointer (base, LocVar, _) ->
           let ienv' = expand (base, Cst.cst_true) ienv in
           let ins_base = InstEnv.find base ienv' in
-          Val.fold 
-            (fun (b, cst) ienv ->
-              InstEnv.add loc (Heap.find b caller_heap) ienv)
-              (*
-              (match Heap.find_opt b caller_heap with
-              | Some v ->
-                  let v' = Helper.(v ^ cst) in
-                  cache := Cache.add loc v' !cache;
-                  InstEnv.add loc v' ienv
-              | None ->
-                  if Loc.is_in caller_scope b || Loc.is_in VVar.glob_scope b then
-                    let ptr = Loc.mk_pointer b in
-                    let v = (Val.singleton (ptr, cst)) in
-                    cache := Cache.add loc v !cache;
-                    InstEnv.add loc v ienv
-                  else ienv))*)
-            ins_base ienv'
+          let ins_ptr = inst_base (fun (b, cst) -> Heap.find b caller_heap) ins_base in
+          InstEnv.add loc ins_ptr ienv'
+
       | _ -> 
           ienv
+    )
   in
   let fold_f loc value ienv = expand (loc, Cst.cst_true) ienv |> Val.fold expand value in
   Heap.fold fold_f callee_heap ienv
@@ -168,7 +159,7 @@ let mk_ienv tenv caller_scope params args callee_heap caller_heap =
   let res = fp_mk_ienv tenv caller_scope callee_heap heap' ienv |> InstEnv.optimize in
   let end_gettimeofday = Unix.gettimeofday () in
   (*let () = L.progress "\tDone.: %f\n@." (end_gettimeofday -. start_gettimeofday) in*)
-  let () = L.progress "IENV: %a\n@." InstEnv.pp res in
+  (*let () = L.progress "IENV: %a\n@." InstEnv.pp res in*)
   res
 
 (* instantiate a constraint *)

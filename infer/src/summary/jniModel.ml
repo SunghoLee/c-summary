@@ -89,7 +89,7 @@ let put_jni_env_modeling loc heap =
   let add_fun_field loc fun_name heap =
     let open SemanticSummaryDomain in
     let jni_fun_name = "_JNIEnv_" ^ fun_name in
-    let f = Loc.mk_const_of_string fun_name in
+    let f = Loc.to_const_typ_of_string fun_name in
     let offset = Loc.mk_offset loc f in
     let f_loc = mk_fun_ptr jni_fun_name |> Loc.mk_fun_pointer in
     Heap.add offset (Val.singleton (f_loc, Cst.cst_true)) heap
