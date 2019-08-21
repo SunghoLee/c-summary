@@ -6,6 +6,14 @@ open SemanticSummaryDomain
 module Y = JoustSyntax
 module F = Format
 
+module GlobalVars = struct
+  module SS = Set.Make(String)
+
+  let set = ref SS.empty
+
+  let add v = set := SS.add v (!set)
+end
+
 module ModelHelper = struct
   (* make string `s` into java-compatible name *)
   let encode_name s =
@@ -45,7 +53,8 @@ module ModelHelper = struct
     | Loc.Explicit v -> "ex$$" ^ string_of_var v
     | Loc.Implicit s ->
         if LocSet.mem loc glocs
-        then encode_global_full_name s
+        then (GlobalVars.add s;
+              encode_global_full_name s)
         else "im$$" ^ encode_name s
     | Loc.Const v ->
         simple_destruct_const_typ v
@@ -329,8 +338,7 @@ module State = struct
                       string option)
   type t = { mutable registered : (string * parsed_name) list }
 
-  let mk_empty () =
-    { registered = [] }
+  let mk_empty () = { registered = [] }
 
   let get_registered {registered} = registered
 
