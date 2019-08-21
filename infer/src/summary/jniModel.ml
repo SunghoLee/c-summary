@@ -17,6 +17,7 @@ let jni_struct =
   [ "android_app"
   ; "_JNIEnv" 
   ; "JNINativeInterface"
+  ; "JNINativeInterface_"
   ]
 
 let jni_obj_typ = 
@@ -55,6 +56,15 @@ let is_jni_env_ptr_for_c typ =
   | _ ->
       false
 
+let rec is_jni_env_for_c_rec typ =
+  match typ.Typ.desc with
+  | Tptr (typ', _) ->
+      is_jni_env_for_c_rec typ'
+  | Tstruct _ -> 
+      is_jni_env_for_c typ
+  | _ ->
+      false
+
 let is_java_native f = 
   let name = Typ.Procname.to_string f in
   String.is_prefix name "Java_"
@@ -71,6 +81,15 @@ let is_jni_struct typ =
   | Some s ->
       Caml.List.mem (Typ.Name.name s) jni_struct
   | None ->
+      false
+
+let rec is_jni_struct_rec typ =
+  match typ.Typ.desc with
+  | Tptr (typ', _) ->
+      is_jni_struct_rec typ'
+  | Tstruct _ -> 
+      is_jni_struct typ
+  | _ ->
       false
 
 let is_entry f = 

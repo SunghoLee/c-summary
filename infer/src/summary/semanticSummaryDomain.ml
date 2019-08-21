@@ -106,6 +106,7 @@ module Loc = struct
   
   and t = 
   | LocTop 
+  | JniEnv
   | Explicit of VVar.t
   | Implicit of string
   | Const of const_type
@@ -123,6 +124,7 @@ module Loc = struct
 
   let rec pp fmt = function
     | LocTop -> F.fprintf fmt "LOCTOP"
+    | JniEnv -> F.fprintf fmt "JniEnv"
     | Explicit i -> F.fprintf fmt "EX#%a(%a)" VVar.pp i VVar.pp_var_scope i
     | Implicit i -> F.fprintf fmt "IM#%s" i
     | Const i -> F.fprintf fmt "CONST#%a" pp_const i
@@ -154,10 +156,14 @@ module Loc = struct
       1 + (get_k b)
   | Ret _ ->
       1
+  | JniEnv _ ->
+      100000
 
 let rec is_global_loc (loc: t) =
   match loc with
   | LocTop ->
+      false
+  | JniEnv ->
       false
   | Explicit v ->
       VVar.is_global v
@@ -179,6 +185,10 @@ let rec is_global_loc (loc: t) =
   let to_const_typ_of_z z = Z z
 
   let const_typ_top = ConstTop
+
+  let is_jni_env = function JniEnv -> true | _ -> false
+
+  let jni_env = JniEnv
 
   let is_const_top = function ConstTop -> true | _ -> false
 
@@ -249,7 +259,7 @@ let rec is_global_loc (loc: t) =
   let mk_offset l i = Offset (l, i)
 
   let rec is_concrete = function
-    | LocTop | Explicit _ | Implicit _ | Const _ | FunPointer _ | Ret _ ->
+    | LocTop | Explicit _ | Implicit _ | Const _ | FunPointer _ | Ret _ | JniEnv ->
         true
     | Pointer (l, typ, _) -> 
         typ = ConcreteLoc
@@ -257,7 +267,7 @@ let rec is_global_loc (loc: t) =
         is_concrete l
 
   let rec is_dyn = function
-    | LocTop | Explicit _ | Implicit _ | Const _ | FunPointer _ | Ret _ ->
+    | LocTop | Explicit _ | Implicit _ | Const _ | FunPointer _ | Ret _ | JniEnv ->
         false
     | Pointer (l, typ, b) -> 
         b || is_dyn l    
@@ -275,6 +285,8 @@ let rec is_global_loc (loc: t) =
   let rec is_in scope loc =
     match loc with
     | LocTop ->
+        true
+    | JniEnv ->
         true
     | Explicit var ->
         VVar.is_in scope var 
@@ -306,6 +318,8 @@ let rec is_global_loc (loc: t) =
 
   and ( <= ) lhs rhs =
     match lhs, rhs with
+    | JniEnv, JniEnv ->
+        true
     | _, LocTop ->
         true
     | LocTop, _ -> 
@@ -317,9 +331,8 @@ let rec is_global_loc (loc: t) =
     | Const lhs_const, Const rhs_const ->
         leq_const lhs_const rhs_const
     | Pointer (lhs_ptr, lhs_typ, _), Pointer (rhs_ptr, rhs_typ, _) ->
-        lhs_typ = rhs_typ && lhs_ptr <= rhs_ptr
-    | FunPointer lhs_ptr, FunPointer rhs_ptr ->
-        (Typ.Procname.compare lhs_ptr rhs_ptr) = 0
+        lhs_typ = rhs_typ && lhs_ptr <= rhs_ptr 
+        (*(Typ.Procname.compare lhs_ptr rhs_ptr) = 0*)
     | Offset (lhs_loc, lhs_index), Offset (rhs_loc, rhs_index) ->
         (lhs_loc <= rhs_loc) && (leq_const lhs_index rhs_index)
     | Ret lhs_ret, Ret rhs_ret ->
@@ -728,13 +741,24 @@ module Heap = struct
       (fun (loc: Loc.t) -> match loc with Offset (base, _) -> base = l | _ -> false)
       (flatten_heap_locs heap)
 
+  let g_thresh = 1 
+
   let find l heap =
     match find_opt l heap with
     | Some v ->
         v
     | None ->
-        if Loc.is_global_loc l then
-          Val.singleton (Loc.mk_concrete_pointer l, Cst.cst_true)
+        if Loc.is_fun_pointer l then
+          Val.singleton (l, Cst.cst_true)
+        else if Loc.is_jni_env l then
+          Val.singleton (l, Cst.cst_true)
+        else if Loc.is_global_loc l then
+          let len = Loc.get_k l in(
+          if len < g_thresh then
+            Val.singleton (Loc.mk_concrete_pointer l, Cst.cst_true)
+          else 
+            Val.singleton (LocTop, Cst.cst_true)
+          )
         else
           Val.empty
 
@@ -742,6 +766,8 @@ module Heap = struct
      
   let add l v heap =
     if l = (Loc.mk_const_of_z Z.zero) then
+      heap
+    else if Loc.is_top l then
       heap
     else if Loc.is_dyn l then
       weak_update l v heap

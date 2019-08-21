@@ -107,7 +107,7 @@ let get_struct typ tenv =
 module TypSet = PrettyPrintable.MakePPSet(struct include Typ let pp = pp_full Pp.text end)
 
 let should_ignore typ visited = 
-  if JniModel.is_jni_struct typ then true (* UNSOUND: ignore JNI defined struct *)
+  if JniModel.is_jni_struct_rec typ then true (* UNSOUND: ignore JNI defined struct *)
   else if TypSet.mem typ visited then true (* UNSOUND: ignore nested type *)
   else if TH.is_not_allowed typ then true (* UNSOUND: ignore primitive type *)
   else false
@@ -207,7 +207,6 @@ let init tenv pdesc =
     | None ->
         Heap.empty)
   else 
-    let _ = Caml.List.iter (fun (arg, typ) -> let _ = TH.is_finally_primitive typ in L.progress "%s:%a\n@." (Mangled.to_string arg) (Typ.pp_full Pp.text) typ) (Procdesc.get_formals pdesc) in
     let arg_vars = (Caml.List.map
       (fun (arg, typ) -> (VVar.of_string (Mangled.to_string arg) ~proc:scope, typ))
       (Procdesc.get_formals pdesc)) 
@@ -232,5 +231,5 @@ let init tenv pdesc =
         let tmap = mk_tmap locs_arg tenv TypMap.empty in
         init_heap ~this:false ~do_array:false (locs_arg @ locs_loc) tenv Heap.empty tmap
     in
-    let () = L.progress "#INIT: %a\n@." Heap.pp res in
+    (*let () = L.progress "#INIT: %a\n@." Heap.pp res in*)
     res

@@ -51,5 +51,5 @@ let _  =
   let all_procs = get_all_procs () in
   let summs = get_summaries all_procs in
   let gt = collect_all_globals summs in
-  print_all gt;
+  (*print_all gt;*)
   PreForGlobal.Storage.store gt

@@ -100,14 +100,12 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
       | Lindex (e1, e2) -> (
         match handle_arr e1 e2 t with
         | Some (p, t') -> 
-            let () = L.progress "G: %a : %a\n@." (Pvar.pp Pp.text) p (Typ.pp_full Pp.text) t' in
             Domain.add p t' m
         | None ->
             m)
       | Sizeof data -> m
       | Lvar pvar -> 
               if Pvar.is_global pvar then
-                let () = L.progress "G: %a : %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) t in
                   Domain.add pvar t m
               else 
                   m
@@ -116,14 +114,12 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
     match e with
     | Lvar pvar -> 
         if Pvar.is_global pvar then
-          let () = L.progress "G: %a : %a\n@." (Pvar.pp Pp.text) pvar (Typ.pp_full Pp.text) typ in
           Domain.add pvar typ astate
         else
           astate
     | Lindex (arr, i) -> (
         match handle_arr arr i typ with
         | Some (p, t) ->
-            let () = L.progress "G: %a : %a\n@." (Pvar.pp Pp.text) p (Typ.pp_full Pp.text) t in
             Domain.add p t astate
         | _ ->
             astate
@@ -132,7 +128,7 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
 
   let exec_instr astate proc_data node (instr: Sil.instr) =
       (*L.progress "PRE: %s\n@." (Domain.pp_m astate);*)
-      pp_inst proc_data instr; 
+      (*pp_inst proc_data instr; *)
       let post = (
       match instr with
       | Load (id, e1, typ, loc) -> 
@@ -148,13 +144,9 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
       (* Calling an initializer function behaves quite differently from normal functions. The argument type is not deterministic. *)
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) when String.is_prefix (Typ.Procname.to_string callee_pname) ~prefix:"__variable_initialization" ->
           (*Caml.List.fold_left (fun i (e, t) -> exec_expr i e (Typ.mk (Tptr (t, Pk_pointer)))) astate args*)
-          let _ = Caml.List.iter (fun (e, t) -> L.progress "ARG: %a:%a\n@." Exp.pp e (Typ.pp_full Pp.text) t) args in
-          let _ = L.progress "CALLLE: %s\n@." (Typ.Procname.to_string callee_pname) in
           Caml.List.fold_left (fun i (e, t) -> handle_global e t i) astate args
 
       | Call ((id, typ_e1), (Const (Cfun callee_pname)), args, loc, flag) -> 
-          let _ = Caml.List.iter (fun (e, t) -> L.progress "ARG: %a:%a\n@." Exp.pp e (Typ.pp_full Pp.text) t) args in
-          let _ = L.progress "CALLLE: %s\n@." (Typ.Procname.to_string callee_pname) in
           Caml.List.fold_left (fun i (e, t) -> 
             if Typ.is_pointer t then
               handle_global e (Typ.strip_ptr t) i
@@ -222,7 +214,7 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
     let proc_name_str = Typ.Procname.to_string (Procdesc.get_proc_name proc_desc) in
     match Analyzer.compute_post proc_data ~initial:NameType.empty with
       | Some p -> 
-          let _ = L.progress "Proc: %s\nFINAL: %a\n" proc_name_str NameType.pp p in
+    (*      let _ = L.progress "Proc: %s\nFINAL: %a\n" proc_name_str NameType.pp p in*)
           (*Storage.store p;*)
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.global_preanalysis = Some p}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}

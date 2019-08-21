@@ -58,7 +58,9 @@ let rec get_glob_pvar_opt (expr: Exp.t) =
   *)
 
 let rec mk_dummy_heap tenv visited heap (addr, typ) = 
-  if Heap.mem addr heap then
+  if TypSet.mem typ visited then
+    heap
+  else if Heap.mem addr heap then
     heap
   else
     let desc = typ.Typ.desc in
@@ -74,16 +76,6 @@ let rec mk_dummy_heap tenv visited heap (addr, typ) =
             (fun heap (field, typ) ->
               mk_dummy_heap tenv visited' heap (Loc.mk_offset addr (Loc.to_const_typ_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap )
     | Tarray {elt; length = Some i} -> (* fixed size arrays *)
-        (*
-        let loc' = addr in(*Loc.unwrap_ptr addr in*) (* C allocates array location directly to variable address *)
-        let index = (IntLit.to_int_exn i) - 1 in
-        let rec mk_array i heap = 
-          if i = -1 then heap
-          else
-            mk_dummy_heap tenv visited heap (Loc.mk_offset loc' (Loc.mk_const_of_z (Z.of_int i)), (Typ.mk (Tptr (elt, Pk_pointer)))) 
-            |> mk_array (i - 1)
-        in
-        mk_array index heap*)
         heap
     | _ -> 
         heap

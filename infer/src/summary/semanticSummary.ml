@@ -100,11 +100,7 @@ module TransferFunctions = struct
     let glob_pvar = GH.get_glob_pvar e in
     let all_globals = GlobalEnv.internal_get_glob_pvars () in
     try Caml.List.find (fun (pvar', typ) -> pvar' = glob_pvar) all_globals with _ ->
-      try Caml.List.find (fun (pvar', typ) -> Mangled.equal (Pvar.get_name pvar') (Pvar.get_name glob_pvar)) all_globals with _ ->
-        let _ = L.progress "#### NOTFOUND!! \n #### PVAR: %a \n@." (Pvar.pp Pp.text) glob_pvar in
-        let _ = Caml.List.iter (fun (p, t) -> L.progress "### G: %a: %a\n@." (Pvar.pp Pp.text) p (Typ.pp_full Pp.text) t) all_globals in
-        failwith (F.asprintf "TTTTTTTTTTTTTTTTTTTTTTTTTTT: %a" (Pvar.pp Pp.text) glob_pvar)
-
+      Caml.List.find (fun (pvar', typ) -> Mangled.equal (Pvar.get_name pvar') (Pvar.get_name glob_pvar)) all_globals
 
   let get_global_pvar_and_typ_opt e =
     try Some (get_global_pvar_and_typ e) with _ -> None
@@ -176,10 +172,11 @@ module TransferFunctions = struct
           let loc = Loc.of_pvar ~proc:scope pvar in
           Val.singleton (loc, Cst.cst_true)
       | Lfield (e, fn_tn, typ) -> (* Location of a field *)
-          let field = Typ.Fieldname.to_string fn_tn |> Loc.to_const_typ_of_string in
+          let field_str = Typ.Fieldname.to_string fn_tn in
+          let field = Loc.to_const_typ_of_string field_str in
           let obj_addr_v = exec_expr scope location heap e in
           let obj_v = Helper.load obj_addr_v heap in
-          Val.map (fun (l, cst) -> Loc.mk_offset l field, cst) obj_v
+          Val.map (fun (l, cst) -> if Loc.is_jni_env l then (Typ.Procname.from_string_c_fun ("_JNIEnv_" ^ field_str) |> Loc.mk_fun_pointer, cst) else Loc.mk_offset l field, cst) obj_v
       | Lindex (e1, Const (Cint s)) -> (* &(e1[e2]) *)
           let index = IntLit.to_big_int s |> Loc.mk_const_of_z in
           let arr_addr_v = exec_expr scope location heap e1 in (* address of e1 *)
@@ -234,7 +231,7 @@ module TransferFunctions = struct
 
   let exec_instr : Domain.t -> extras ProcData.t -> CFG.Node.t -> Sil.instr -> Domain.t = 
     fun {heap; logs} {pdesc; tenv; extras} node instr ->
-      let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in
+      (*let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in*)
       let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
       let scope = VVar.mk_scope proc_name in
       match instr with
@@ -515,8 +512,8 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
       (*(if (Typ.Procname.to_string proc_name) = "JavaCPP_getClass" then
         debug := true
       );*)
-        let () = L.progress "Analyzing a function %s\n@." (Typ.Procname.to_string proc_name) in
-        let () = L.progress "ATTRIBUTE:\n%a\n@." ProcAttributes.pp (Procdesc.get_attributes proc_desc) in
+      (*  let () = L.progress "Analyzing a function %s\n@." (Typ.Procname.to_string proc_name) in*)
+        (*let () = L.progress "ATTRIBUTE:\n%a\n@." ProcAttributes.pp (Procdesc.get_attributes proc_desc) in*)
         let heap = Initializer.init tenv proc_desc in
         let before_astate = SemanticSummaryDomain.make heap SemanticSummaryDomain.CallLogs.empty in
         let proc_data = ProcData.make_default proc_desc tenv in (
@@ -525,9 +522,9 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
           let opt_astate = Domain.optimize p ~scope:(VVar.mk_scope (Typ.Procname.to_string proc_name)) ~rm_tmp: true in
           let f_heap = opt_astate.Domain.heap in
           let gstore = GlobalHandler.collect_global_store f_heap in
-          L.progress "GLOBAL_UPDATE: %a\n@." GlobalHandler.GlobalStore.pp gstore; 
+          (*L.progress "GLOBAL_UPDATE: %a\n@." GlobalHandler.GlobalStore.pp gstore; 
           L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
-          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;
+          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some (opt_astate, gstore)}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 
