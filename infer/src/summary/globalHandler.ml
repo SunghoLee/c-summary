@@ -71,10 +71,12 @@ let rec mk_dummy_heap tenv visited heap (addr, typ) =
         let heap' = Heap.add addr (Val.singleton (ptr_loc, Cst.cst_true)) heap in
         mk_dummy_heap tenv visited' heap' (ptr_loc, ptr_typ)
     | Tstruct name -> (
-        HelperFunction.get_fld_and_typs name tenv
-        |> Caml.List.fold_left
+        match HelperFunction.get_fld_and_typs_opt name tenv with
+        | Some s -> Caml.List.fold_left
             (fun heap (field, typ) ->
-              mk_dummy_heap tenv visited' heap (Loc.mk_offset addr (Loc.to_const_typ_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap )
+              mk_dummy_heap tenv visited' heap (Loc.mk_offset addr (Loc.to_const_typ_of_string field), (Typ.mk (Tptr (typ, Pk_pointer))))) heap s
+        | None -> heap
+        )
     | Tarray {elt; length = Some i} -> (* fixed size arrays *)
         heap
     | _ -> 
