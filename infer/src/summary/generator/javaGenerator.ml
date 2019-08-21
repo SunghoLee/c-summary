@@ -10,8 +10,16 @@ module F = Format
 module H = JavaGeneratorModels.ModelHelper
 module S = JavaGeneratorModels.State
 module M = JavaGeneratorModels.SimpleModel
+module G = JavaGeneratorModels.GlobalVars
 
 module ProcInfo = JavaGeneratorModels.ProcInfo
+
+(* -- Options -- *)
+
+(* generate_c_fn: when it is true, the generator will make '__C' package
+ *   and generate summary for non-boundary C functions *)
+let option_generate_c_fn = false
+
 
 (* -- Util -- *)
 (* make_string: make comp_unit into string(java code) *)
@@ -240,7 +248,8 @@ let solve_dependency logs =
   |> f [] []
   |> List.rev
 
-(* get_summary_k: get procedure's summary and pass it to the callback `cb` *)
+(* get_summary_k: get procedure's summary and pass it to the callback `cb`
+ *   if it fails, callback `defualt` will be called *)
 let get_summary_k proc default cb =
   match Summary.get proc with
   | None -> default 0
@@ -248,6 +257,7 @@ let get_summary_k proc default cb =
     | None -> default 1
     | Some (ss, _) -> cb s ss
 
+(* parse_body: parse function body and generate method body *)
 let parse_body state glocs name {heap; logs} =
   CallLogs.fold (fun e l -> e :: l) logs []
   |> sort_logs
@@ -320,17 +330,18 @@ let is_global_fn name =
 (* each_proc_cb: process for procedures *)
 let each_proc_cb state glocs res (proc, is_ent) =
   let procname = InferIR.Typ.Procname.to_string proc in
+  let optional cond cb = if cond then cb else (fun x -> x) in
   F.printf "Current Proc Name: %s\n" procname;
   let is_java, parsed = parse_java_name procname in
-  get_summary_k proc (fun x -> F.printf "Failed to get summary %d\n" x; res) (fun s ss ->
-    let cb is_java parsed_name res =
-      each_proc_cb' state glocs res s ss proc
-        is_ent procname is_java parsed_name in
-    cb is_java parsed res
-    |> S.fold_name_of state procname (cb true)
-    |> (if is_global_fn procname
-        then cb false ([M.model_pkg_name], "__Global", procname, None)
-        else (fun x -> x)))
+  get_summary_k proc (fun x -> F.printf "Failed to get summary %d\n" x; res)
+    (fun s ss ->
+      let cb is_java parsed_name res =
+        each_proc_cb' state glocs res s ss proc
+          is_ent procname is_java parsed_name in
+      res |> optional (is_java || option_generate_c_fn) (cb is_java parsed)
+          |> S.fold_name_of state procname (cb true)
+          |> optional (is_global_fn procname)
+            (cb false ([M.model_pkg_name], "__Global", procname, None)))
 
 let load_glocs () = 
   try
@@ -343,21 +354,17 @@ let load_glocs () =
     let _ = Printf.eprintf "errorerror: %s\n" (Printexc.to_string e) in
     LocSet.empty
 
-let insert_global_loc loc pkgclss =
+let insert_global_var name pkgclss =
   let pkg = ["__Model"] in
   let cls = "__Global" in
-  match loc with
-  | Loc.Implicit name ->
-      let name' = H.encode_global_name name in
-      print_string ("* Global Implicit: " ^ name' ^ "\n");
-      let field = Y.(Field {f_var = {
-          v_mods = [Public; Static];
-          v_type = TypeName
-              (List.map (fun x -> ident x 0) ["java"; "lang"; "Object"]);
-          v_name = ident name' 0};
-                f_init = None}) in
-      insert_decl pkgclss pkg cls field
-  | _ -> pkgclss
+  let name' = H.encode_global_name name in
+  let field = Y.(Field {f_var = {
+      v_mods = [Public; Static];
+      v_type = TypeName
+          (List.map (fun x -> ident x 0) ["java"; "lang"; "Object"]);
+      v_name = ident name' 0};
+            f_init = None}) in
+  insert_decl pkgclss pkg cls field
 
 (* generate: generate compilation_units from infer-out *)
 let generate () =
@@ -366,7 +373,7 @@ let generate () =
   print_string ("#procs = " ^ string_of_int (List.length procs) ^ "\n");
   let state = S.mk_empty () in
   List.fold_left (each_proc_cb state glocs) PkgClss.empty procs
-  |> LocSet.fold insert_global_loc glocs
+  |> G.SS.fold insert_global_var (!G.set)
   |> gen_compilation_units
 
 (* write_as_files: generate java files from the result of `generate` *)
