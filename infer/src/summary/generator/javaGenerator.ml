@@ -311,7 +311,7 @@ let gen_compilation_units pkgclss =
     pkgclss []
 
 let each_proc_cb' state glocs res s ss proc is_ent procname is_java parsed = 
-  F.printf "each_proc_cb': %s\n" procname;
+  (* F.printf "each_proc_cb': %s\n" procname; *)
   let attr = Summary.get_attributes s in
   let ret_type = parse_type (attr.ret_type) in
   let kind, is_static, formals = parse_formals is_java attr.formals in
@@ -332,9 +332,9 @@ let is_global_fn name =
 let each_proc_cb state glocs res (proc, is_ent) =
   let procname = InferIR.Typ.Procname.to_string proc in
   let optional cond cb = if cond then cb else (fun x -> x) in
-  F.printf "Current Proc Name: %s\n" procname;
+  (* F.printf "Current Proc Name: %s\n" procname; *)
   let is_java, parsed = parse_java_name procname in
-  get_summary_k proc (fun x -> F.printf "Failed to get summary %d\n" x; res)
+  get_summary_k proc (fun x -> (*F.printf "Failed to get summary %d\n" x;*) res)
     (fun s ss ->
       let cb is_java parsed_name res =
         each_proc_cb' state glocs res s ss proc
@@ -349,10 +349,10 @@ let load_glocs () =
     let ic = Pervasives.open_in "global_locations.dat" in
     let res = Marshal.from_channel ic in
     Pervasives.close_in ic;
-    F.printf "glocs = %a\n" LocSet.pp res;
+    (* F.printf "glocs = %a\n" LocSet.pp res; *)
     res
   with e ->
-    let _ = Printf.eprintf "errorerror: %s\n" (Printexc.to_string e) in
+    (* let _ = Printf.eprintf "errorerror: %s\n" (Printexc.to_string e) in *)
     LocSet.empty
 
 let insert_global_var name pkgclss =
@@ -371,7 +371,7 @@ let insert_global_var name pkgclss =
 let generate () =
   let procs = get_all_procs () in
   let glocs = load_glocs () in
-  print_string ("#procs = " ^ string_of_int (List.length procs) ^ "\n");
+  (* print_string ("#procs = " ^ string_of_int (List.length procs) ^ "\n"); *)
   let state = S.mk_empty () in
   List.fold_left (each_proc_cb state glocs) PkgClss.empty procs
   |> G.SS.fold insert_global_var (!G.set)
@@ -405,7 +405,7 @@ let _ =
   print_string "## [JavaGenerator]\n";
   let result = generate () in
   write_as_files "java-gen-out" result;
-  result
+  () (*result
   |> List.map (fun (_, _, cmpl) -> make_string cmpl)
   |> String.concat "\n;;;\n"
-  |> print_string
+  |> print_string *)

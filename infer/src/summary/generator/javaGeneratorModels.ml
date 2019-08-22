@@ -254,7 +254,6 @@ module ModelHelper = struct
 
   (* parse method jni type signature and return args Y.typ s and ret Y.typ *)
   let parse_method_sig sign =
-    print_string ("# INFO parse_method_sig: " ^ sign);
     let o = String.index sign '(' in
     let c = String.index sign ')' in
     let n = String.length sign in
@@ -470,7 +469,7 @@ module SimpleModel : GeneratorModel = struct
                else top
       | x -> match H.simple_destruct_loc glocs x with
         | Y.Name [id] when not (List.mem_assoc (Y.id_string id) stk) ->
-            print_string ("TOP for " ^ Y.id_string id ^ "\n");
+            (* print_string ("TOP for " ^ Y.id_string id ^ "\n"); *)
             top
         | y -> y
 
@@ -480,7 +479,7 @@ module SimpleModel : GeneratorModel = struct
       let t = match typ with
         | Y.TypeName [n] -> Y.id_string n
         | _ -> "" in
-      print_string ("TypeName: " ^ t ^ "\n");
+      (* print_string ("TypeName: " ^ t ^ "\n"); *)
       Y.Literal (match t with
                 | "boolean" ->
                     if s = "0" then "false" else "true"
@@ -510,7 +509,7 @@ module SimpleModel : GeneratorModel = struct
 
   let typed_destruct_val glocs proc typ stk v =
     let f (l, c) res =
-      F.printf "tdv.f : %a\n" Loc.pp l;
+      (* F.printf "tdv.f : %a\n" Loc.pp l; *)
       if res = top
       then typed_destruct_loc glocs proc typ stk l
       else res
@@ -519,6 +518,7 @@ module SimpleModel : GeneratorModel = struct
   let handle_register_natives state glocs heap stk cls mths =
     let l_cls = H.simple_destruct_loc' glocs cls in
     match List.assoc_opt l_cls stk with
+    | None -> ()
     | Some (JClass ls) ->
       ls |> List.iter (fun (Y.TypeName l) ->
         (match l |> List.map Y.id_string |> List.rev with
@@ -531,7 +531,7 @@ module SimpleModel : GeneratorModel = struct
             if not (cond i) then ()
             else let l_ptr = box (Loc.Z (Z.of_int i)) mths in
                  let off s = box (Loc.String s) l_ptr in
-              F.printf "RegNat: %a\n" Loc.pp (off "FIELD");
+              (* F.printf "RegNat: %a\n" Loc.pp (off "FIELD"); *)
                  let find_from heap field =
                    match Heap.find_opt (off field) heap with
                    | None -> None
@@ -549,14 +549,12 @@ module SimpleModel : GeneratorModel = struct
                          (InferIR.Typ.Procname.to_string fn_ptr)
                          (pkg, cls', name, Some sign);
                       g cond (i + 1)
-                   | _ -> () in
+                   | _ -> F.printf " - handled: %d\n" i in
                  handle_find_from heap in
           (*match H.get_int_from_heap n heap with 
           | None -> g (fun _ -> true) 0
           | Some n' -> g (fun x -> x < n') 0)*)
-          g (fun _ -> true) 0)
-      )
-    | _ -> () 
+          g (fun _ -> true) 0))
 
   let init_stk glocs ProcInfo.{kind; formals} =
     let mk name = name, JUnknown in
@@ -611,6 +609,7 @@ module SimpleModel : GeneratorModel = struct
         x :: stk
       | _ -> (rloc, JUnknown) :: stk )*)
     | "RegisterNatives", [env; cls; mths; n] when ProcInfo.is_entry proc ->
+      F.printf "[INFO] Handle RegisterNatives\n";
       List.iter (fun c -> 
         List.iter (fun m ->
           handle_register_natives state glocs heap stk c m

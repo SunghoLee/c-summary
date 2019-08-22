@@ -206,8 +206,8 @@ let _  =
   let ilocs = collect_implicit_locs gs'' in
   let summs' = replace gs'' summs in
   update_summaries summs';
-  print_all();
+  (*print_all();
   print_gs gs'';
-  ;
+  ;*)
   IOModule.store_glocs ilocs
 

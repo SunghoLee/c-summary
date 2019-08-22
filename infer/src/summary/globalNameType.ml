@@ -34,12 +34,12 @@ let choose_most_specific_one typ1 typ2 =
     | _, Tarray _ -> typ2
     | Tvoid, _ -> typ2
     | _, Tvoid -> typ1
-    | _ -> 
-        if Typ.equal_desc typ1.Typ.desc typ2.Typ.desc then
+    | _ -> typ1
+        (*if Typ.equal_desc typ1.Typ.desc typ2.Typ.desc then
           typ1
         else
           let _ = L.progress "Not compatible types:  %a <> %a\n@." (Typ.pp_full Pp.text) typ1 (Typ.pp_full Pp.text) typ2 in
-          typ1
+          typ1*)
           (*failwith (F.asprintf "Not compatible types: %a <> %a" (Typ.pp_full Pp.text) typ1 (Typ.pp_full Pp.text) typ2)*)
     (*
     | Tint of ikind  (** integer type *)
@@ -118,12 +118,12 @@ let join lhs rhs =
   |> (fun x -> union x lhs rhs)
 
 let widen ~prev ~next ~num_iters = 
-  (
+  (*(
   if num_iters > 500 then
     let _ = L.progress "PREV: %a\n@." pp prev in
     let _ = L.progress "NEXT: %a\n@." pp next in
     let _ = L.progress "EQ: %b\n@." (prev <= next) in
-    ());
+    ());*)
   join prev next
 
 let add pvar typ m =
