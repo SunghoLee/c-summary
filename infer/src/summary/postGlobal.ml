@@ -113,6 +113,30 @@ let replace gs summs =
   in
   Caml.List.fold_left f [] summs
 
+let append_globals_heap gs heap =
+  let f l v h =
+    Heap.add l v h
+  in
+  Heap.fold f gs heap
+
+let append_globals_log gs log =
+  let f u l =
+    CallLogs.add {u with LogUnit.heap =
+                           append_globals_heap gs u.LogUnit.heap} l
+  in
+  CallLogs.fold f log CallLogs.empty
+
+let append_globals gs summs =
+  let f l s = (
+    match s.Summary.payloads.Payloads.semantic_summary with
+    | Some ({heap; logs}, gs') -> (
+        let heap' = append_globals_heap gs heap in
+        let logs' = append_globals_log gs logs in
+        let s' = {s with Summary.payloads = { s.Summary.payloads with Payloads.semantic_summary = Some ({heap = heap'; logs = logs'}, gs') }} in
+        s' :: l)
+    | None -> l)
+  in Caml.List.fold_left f [] summs
+
 let remove_loc l v =
   Val.filter (fun (l', cst) -> not (l = l')) v
 
@@ -205,7 +229,8 @@ let _  =
   let gs'' = lift gs' in
   let ilocs = collect_implicit_locs gs'' in
   let summs' = replace gs'' summs in
-  update_summaries summs';
+  let summs'' = append_globals gs' summs' in
+  update_summaries summs'';
   (*print_all();
   print_gs gs'';
   ;*)

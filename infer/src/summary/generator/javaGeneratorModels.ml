@@ -525,32 +525,40 @@ module SimpleModel : GeneratorModel = struct
         | [] -> ()
         | cls' :: pkg_r ->
           let pkg = List.rev pkg_r in
-          let box c t =
-            Loc.Offset (Loc.Pointer (t, Loc.ConcreteLoc, false), c) in
+          let ptr t = Loc.Pointer (t, Loc.ConcreteLoc, false) in
+          let box c t = Loc.Offset (ptr t, c) in
           let rec g cond i =
+            (*F.printf "i = %d\n" i;
+            F.printf "heap = %a\n" Heap.pp heap;*)
             if not (cond i) then ()
             else let l_ptr = box (Loc.Z (Z.of_int i)) mths in
                  let off s = box (Loc.String s) l_ptr in
-              (* F.printf "RegNat: %a\n" Loc.pp (off "FIELD"); *)
-                 let find_from heap field =
+               (*F.printf "RegNat: %a\n" Loc.pp (off "FIELD"); *)
+                 let find_from_heap heap field =
                    match Heap.find_opt (off field) heap with
                    | None -> None
                    | Some x -> match Val.elements x with
-                     | [l, c] -> Some l
+                     | (l, c) :: _ -> Some l
                      | _ -> None in
-                 let handle_find_from heap =
-                   match find_from heap "fnPtr",
-                         find_from heap "signature",
-                         find_from heap "name" with
-                   | Some (Loc.FunPointer fn_ptr),
-                     Some (Loc.Const (Loc.String sign)),
-                     Some (Loc.Const (Loc.String name)) ->
-                      State.add_registered state
-                         (InferIR.Typ.Procname.to_string fn_ptr)
-                         (pkg, cls', name, Some sign);
-                      g cond (i + 1)
-                   | _ -> F.printf " - handled: %d\n" i in
-                 handle_find_from heap in
+                 (*let find_from_locset locs field =
+                   match LocSet.find_opt (ptr (off field)) locs with
+                   | None -> None
+                   | Some x -> match Val.elements x with
+                     | (l, c) :: _ -> Some l
+                     | _ -> None in*)
+                 let find field = find_from_heap heap field in
+                   (*match find_from_heap heap field with
+                   | None -> find_from_locset glocs field
+                   | Some x -> Some x in*)
+                 match find "fnPtr", find "signature", find "name" with
+                 | Some (Loc.FunPointer fn_ptr),
+                   Some (Loc.Const (Loc.String sign)),
+                   Some (Loc.Const (Loc.String name)) ->
+                    State.add_registered state
+                       (InferIR.Typ.Procname.to_string fn_ptr)
+                       (pkg, cls', name, Some sign);
+                    g cond (i + 1)
+                 | _ -> F.printf " - handled: %d\n" i in
           (*match H.get_int_from_heap n heap with 
           | None -> g (fun _ -> true) 0
           | Some n' -> g (fun x -> x < n') 0)*)
@@ -572,7 +580,7 @@ module SimpleModel : GeneratorModel = struct
          | _ -> s) glocs
 
   (* update_stk: push class/method/field information into stack *)
-  let update_stk state glocs proc stk heap rloc fn args =
+  let update_stk state glocs gheap proc stk heap rloc fn args =
     match fn, args with
     | "FindClass", [env; cls] -> (
         let t = List.fold_right (fun c l ->
@@ -612,7 +620,7 @@ module SimpleModel : GeneratorModel = struct
       F.printf "[INFO] Handle RegisterNatives\n";
       List.iter (fun c -> 
         List.iter (fun m ->
-          handle_register_natives state glocs heap stk c m
+          handle_register_natives state glocs gheap stk c m
         ) mths
       ) cls;
       stk
@@ -638,7 +646,7 @@ module SimpleModel : GeneratorModel = struct
           mk_all_assigns res ls (e :: cur) cb) l res
 
   (* function to process each log *)
-  let method_body_sub state glocs proc (lst, stk) log =
+  let method_body_sub state glocs gheap proc (lst, stk) log =
     let JF jf_name = LogUnit.get_jfun log in
     let cls, mth = jni_fn_name jf_name in
     let fn = Y.Name [Y.ident cls 0; Y.ident mth 0] in
@@ -661,7 +669,7 @@ module SimpleModel : GeneratorModel = struct
       | Some _ -> (Some (Y.TypeName [Y.ident "" 0]))) in
     let cb args = mk_a ret (Y.Call (fn, args)) in
     let lst'' = mk_all_assigns lst' (List.rev args') [] cb in
-    let stk' = update_stk state glocs proc stk heap ret mth args in
+    let stk' = update_stk state glocs gheap proc stk heap ret mth args in
     lst'', stk'
 
   (* function to generate return stmt *)
@@ -691,7 +699,7 @@ module SimpleModel : GeneratorModel = struct
   let method_body state glocs proc heap logs =
     let stk = init_stk glocs proc in
     let b, rets =
-      List.fold_left (method_body_sub state glocs proc) ([], stk) logs in
+      List.fold_left (method_body_sub state glocs heap proc) ([], stk) logs in
     let b' = match method_body_ret glocs proc rets heap with
              | None when H.typename_is "void" (ProcInfo.get_ret_type proc) -> b
              | Some x -> x :: b

@@ -741,7 +741,7 @@ module Heap = struct
       (fun (loc: Loc.t) -> match loc with Offset (base, _) -> base = l | _ -> false)
       (flatten_heap_locs heap)
 
-  let g_thresh = 1 
+  let g_thresh = 5
 
   let find l heap =
     match find_opt l heap with
