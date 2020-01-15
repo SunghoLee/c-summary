@@ -63,7 +63,12 @@ module PpSumm = struct
   let pp_inst fmt ((node, index), inst) = 
     let node_id = Procdesc.Node.get_id node in
     let inst_type = get_inst_type inst in
-    F.fprintf fmt "%a: [%s] %a" Procdesc.Node.pp_id node_id inst_type (Sil.pp_instr ~print_types: true Pp.text) inst
+    let rec pp_lst fmt = function
+      | [] -> ()
+      | x :: xs -> F.fprintf fmt " %a; %a" Procdesc.Node.pp_id (Procdesc.Node.get_id x) pp_lst xs in
+    F.fprintf fmt "%a: [%s] %a\n" Procdesc.Node.pp_id node_id inst_type (Sil.pp_instr ~print_types: true Pp.text) inst;
+    F.fprintf fmt "  pred [%a]\n" pp_lst (Procdesc.Node.get_preds node);
+    F.fprintf fmt "  succ [%a]" pp_lst (Procdesc.Node.get_succs node)
 end
 
 (* module TypeMap = struct ... end was moved to 'initializer.ml' *)
@@ -229,10 +234,40 @@ module TransferFunctions = struct
         in
         to_file Heap.pp caller "heap_caller"; to_file Heap.pp callee "heap_callee"; to_file Heap.pp merged "heap_merged"; to_file InstEnv.pp ienv "inst_env"
 
+
+  let graph = ControlFlowGraph.Graph.init ()
+
   let exec_instr : Domain.t -> extras ProcData.t -> CFG.Node.t -> Sil.instr -> Domain.t = 
     fun {heap; logs} {pdesc; tenv; extras} node instr ->
-      (*let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in*)
+      let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in
       let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
+      (* vvv  Append node into graph  vvv *)
+      let () =
+        let node = match node with (n, i) -> n in
+        let kind = match instr with
+          | Prune (_, _, true, _) -> ControlFlowGraph.Node.KPruneT
+          | Prune (_, _, false, _) -> ControlFlowGraph.Node.KPruneF
+          | ExitScope _ -> ControlFlowGraph.Node.KEnd
+          | Call _ -> ControlFlowGraph.Node.KCall
+          | _ -> ControlFlowGraph.Node.KCommon in
+        let id = Procdesc.Node.get_id node in
+        let idx = ControlFlowGraph.Graph.alloc_idx graph in
+        let loc = ControlFlowGraph.NodeLoc.mk [proc_name, id, idx] in
+        let succs = Procdesc.Node.get_succs node in
+        let preds = Procdesc.Node.get_preds node in
+        let node = ControlFlowGraph.Graph.add_node (kind, loc) graph in
+        List.iter succs (fun n ->
+            let loc = ControlFlowGraph.NodeLoc.mk [proc_name,
+                                                   Procdesc.Node.get_id n, -1] in
+            ControlFlowGraph.Node.add_succ loc node) ;
+        List.iter preds (fun n ->
+            let loc = ControlFlowGraph.NodeLoc.mk [proc_name,
+                                                   Procdesc.Node.get_id n, -1] in
+            ControlFlowGraph.Graph.add_pred loc node);
+      () in
+      (* ^^^  ----------------------  ^^^ *)
+      let () = match node with 
+        | (n, i) -> L.progress "%s:%a\n@." proc_name Procdesc.Node.pp_id (Procdesc.Node.get_id n) in
       let scope = VVar.mk_scope proc_name in
       match instr with
       | Load (id, e1, typ, loc) when TH.is_not_allowed typ -> ( (* Handling load for global variables *)
@@ -526,6 +561,13 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
           L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
           L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
+
+          ControlFlowGraph.Graph.sort TransferFunctions.graph;
+          L.progress "%a\n@." ControlFlowGraph.Graph.pp TransferFunctions.graph;
+          L.progress "%a\n@."
+            ControlFlowGraph.Graph.export_dot
+            TransferFunctions.graph;
+
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some (opt_astate, gstore)}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 
             summary)
