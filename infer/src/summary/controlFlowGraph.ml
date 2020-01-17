@@ -2,10 +2,6 @@ open! IStd
 open Core
 module F = Format
 module L = Logging
-module Sem = Semanticfunctions
-module TH = TypeHandler
-open SemanticSummaryDomain
-open SUtils
 
 module NodeLoc = struct
   type id_t = Procdesc.Node.id
@@ -13,6 +9,7 @@ module NodeLoc = struct
   type elt =
     { fn: string;
       id: id_t;
+      sub_id: int;
       idx: int }
 
   type t = elt list
@@ -20,17 +17,18 @@ module NodeLoc = struct
   (* Constructor *)
   let rec mk = function
     | [] -> []
-    | (fn, id, idx) :: xs -> {fn; id; idx} :: mk xs
+    | (fn, id, idx) :: xs -> {fn; id; sub_id = 0; idx} :: mk xs
 
   (* Modifiers *)
   let inc_idx = function
     | [] -> []
-    | {fn; id; idx} :: xs -> {fn; id; idx = idx + 1} :: xs
+    | {fn; id; sub_id; idx} :: xs ->
+        {fn; id; sub_id = sub_id + 1; idx = idx + 1} :: xs
 
   (* Compare *)
   let rec mk_list_cmp cmp = function
     | [] -> (function [] -> 0
-                    | y :: ys -> -1)
+                    | _ :: _ -> -1)
     | x :: xs -> function
         | [] -> 1
         | y :: ys -> match cmp x y with 0 -> mk_list_cmp cmp xs ys
@@ -40,17 +38,22 @@ module NodeLoc = struct
 
   let compare_by_idx  = mk_list_cmp compare_elt_by_idx
 
-  let compare_elt { fn = fn1; id = id1 }
-                  { fn = fn2; id = id2 } =
+  let compare_elt { fn = fn1; id = id1; sub_id = sub1 }
+                  { fn = fn2; id = id2; sub_id = sub2 } =
     let c1 = compare fn1 fn2 in
-    if c1 = 0 then compare id1 id2
-              else c1
+    let c2 = compare id1 id2 in
+    if c1 != 0 then c1
+    else if c2 != 0 then c2
+    else compare sub1 sub2
 
   let compare = mk_list_cmp compare_elt
 
   (* pp *)
-  let pp_elt fmt {fn; id; idx} =
-    F.fprintf fmt "%s:%a" fn Procdesc.Node.pp_id id
+  let rec pp_qt fmt = function
+    | n when n > 0 -> F.fprintf fmt "'"; pp_qt fmt (n - 1)
+    | _ -> ()
+  let pp_elt fmt {fn; id; sub_id} =
+    F.fprintf fmt "%s:%a%a" fn Procdesc.Node.pp_id id pp_qt sub_id
 
   let pp fmt =
     let rec f s = function
@@ -128,7 +131,7 @@ module Graph = struct
     mutable nodes: Node.t list;
     mutable idx: int }
 
-  let init () = { nodes = []; idx = 0 }
+  let mk_empty () = { nodes = []; idx = 0 }
 
   (* Index Allocator *)
   let set_idx i g = g.idx <- i; i
@@ -174,35 +177,37 @@ module Graph = struct
     node.Node.pred <- NodeLocSet.add loc node.Node.pred
 
   let sort g =
-    g.nodes <- List.sort (fun { Node.loc = loc1 } { Node.loc = loc2 } ->
+    g.nodes <- List.sort ~compare:(fun { Node.loc = loc1 } { Node.loc = loc2 } ->
         NodeLoc.compare_by_idx loc1 loc2) g.nodes
 
   (* Find Node *)
-  let rec bfs ext_lst visited g n = 
-    if List.exists visited
-        (fun loc -> 0 = NodeLoc.compare_by_idx n.Node.loc loc)
-    then visited
-    else List.fold_right (ext_lst g n) 
+  let rec bfs (max_fn: Node.t -> Node.t -> bool) ext_lst (max, vis) g n = 
+    if List.exists vis
+        ~f:(fun loc -> 0 = NodeLoc.compare_by_idx n.Node.loc loc)
+    then (max, vis)
+    else
+      let new_max = match max with
+        | Some m when max_fn m n -> Some m
+        | _ -> Some n in
+      List.fold_right (ext_lst g n) 
         ~f: (fun loc v -> match find_node loc g with
             | None -> v
-            | Some n' -> bfs ext_lst v g n')
-        ~init: (n.Node.loc :: visited)
+            | Some n' -> bfs max_fn ext_lst v g n')
+        ~init: (new_max, n.Node.loc :: vis)
 
-  let pick_arbitrary_node g = 
-    match g.nodes with
-    | [] -> None
-    | node :: ns -> Some node
-
-  let find_from n ext_lst g =
-    match pick_arbitrary_node g with
-    | None -> None
-    | Some n ->
-        bfs ext_lst [] g n |> function
-        | [] -> None
-        | loc :: ls -> find_node loc g
+  let find_from n max_fn ext_lst g =
+    bfs max_fn ext_lst (None, []) g n |> function
+    | (None, _) -> None
+    | (Some n, _ :: _) -> Some n
     
-  let find_initial n = find_from n (fun _ -> Node.get_pred_list)
-  let find_terminal n = find_from n (fun _ -> Node.get_succ_list)
+  let find_initial n =
+    find_from n
+      (fun a b -> NodeLoc.compare_by_idx a.Node.loc b.Node.loc < 0)
+      (fun _ -> Node.get_pred_list)
+  let find_terminal n =
+    find_from n
+      (fun a b -> NodeLoc.compare_by_idx a.Node.loc b.Node.loc > 0)
+      (fun _ -> Node.get_succ_list)
 
   (* FCS: First Common Successor *)
   let get_strict_successor n g =
@@ -262,6 +267,13 @@ module Graph = struct
                                     tgt.Node.succ
                                     (NodeLocSet.singleton t_loc)
                                     [] in
+                tgt.Node.succ |> NodeLocSet.iter (fun x ->
+                    match find_node x g with
+                    | None -> ()
+                    | Some n ->
+                        n.Node.pred <- n.Node.pred
+                      |> NodeLocSet.remove tgt.Node.loc
+                      |> NodeLocSet.add en_loc);
                 Node.add_pred be_loc i;
                 Node.add_succ en_loc t;
                 g.nodes <- be :: en :: g.nodes

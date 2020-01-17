@@ -156,7 +156,7 @@ module Loc = struct
       1 + (get_k b)
   | Ret _ ->
       1
-  | JniEnv _ ->
+  | JniEnv ->
       100000
 
 let rec is_global_loc (loc: t) =
@@ -669,7 +669,7 @@ module InstEnv = struct
 
   let size ienv = fold (fun l v i -> i + (Val.cardinal v)) ienv 0
 
-  let rec find loc ienv =
+  let find loc ienv =
     match find_opt loc ienv with
     | Some s -> 
         s
@@ -902,7 +902,7 @@ module Heap = struct
     fold opt_v_heap heap empty
 
   let optimize ?scope ?flocs ?rm_tmp heap = 
-    let no_rm_tmp = match rm_tmp with Some true -> false | None -> true in
+    let no_rm_tmp = match rm_tmp with Some true -> false | _ -> true in
     (*let () = L.progress "#Start Heap Optimization\n@." in*)
     let start_gettimeofday = Unix.gettimeofday () in
     let is_seed = 
@@ -1094,27 +1094,32 @@ end
 module Domain = struct
   type t = 
     { heap: Heap.t
-    ; logs: CallLogs.t }
+    ; logs: CallLogs.t
+    ; graph: ControlFlowGraph.Graph.t }
 
   let empty = 
     { heap = Heap.empty
-    ; logs = CallLogs.empty }
+    ; logs = CallLogs.empty
+    ; graph = ControlFlowGraph.Graph.mk_empty () }
 
   let get_heap s = s.heap
 
   let get_logs s = s.logs
 
-  let init = 
-    { heap = Heap.empty
-    ; logs = CallLogs.empty }
+  let get_graph s = s.graph
 
-  let make heap' logs' = 
+  let init = empty
+
+  let make heap' logs' graph' = 
     { heap = heap'
-    ; logs = logs' }
+    ; logs = logs'
+    ; graph = graph' }
 
   let update_heap heap' s = { s with heap = heap' }
 
   let update_logs logs' s = { s with logs = logs' }
+
+  let update_graph graph' s = { s with graph = graph' }
 
   let ( <= ) ~lhs ~rhs = 
     (*Heap.( lhs.heap <= rhs.heap ) 
@@ -1123,17 +1128,19 @@ module Domain = struct
 
   let join lhs rhs = 
     { heap = ( Heap.join lhs.heap rhs.heap )
-    ; logs = ( CallLogs.join lhs.logs rhs.logs ) }
+    ; logs = ( CallLogs.join lhs.logs rhs.logs )
+    ; graph = lhs.graph }
 
   let widen ~prev ~next ~num_iters = 
     if num_iters >= widen_iter then
       (* TODO: need to widen for loop statements *)
       { heap = Heap.widen ~prev:prev.heap ~next:next.heap
-      ; logs = CallLogs.widen ~prev:prev.logs ~next:next.logs ~num_iters}
+      ; logs = CallLogs.widen ~prev:prev.logs ~next:next.logs ~num_iters
+      ; graph = prev.graph }
     else 
       join prev next 
 
-  let rm_redundant ?scope ?rm_tmp {heap; logs} = 
+  let rm_redundant ?scope ?rm_tmp {heap; logs; graph} = 
     let non_temp_locs = 
       (match scope with
       | Some f -> 
@@ -1144,7 +1151,7 @@ module Domain = struct
     in
     let heap' = Heap.optimize heap (*~flocs:non_temp_locs*) ?scope ?rm_tmp in
     let logs' = CallLogs.optimize ?scope logs in
-    make heap' logs'
+    make heap' logs' graph
 
   let optimize ?scope ?rm_tmp astate = 
     rm_redundant astate ?scope ?rm_tmp

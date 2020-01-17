@@ -122,7 +122,7 @@ module TransferFunctions = struct
     else
       Domain.make heap logs
 
-  let rec get_proc_summary ?caller do_clear callee_name = 
+  let get_proc_summary ?caller do_clear callee_name = 
     let sum = 
       match caller with
       | Some s -> (
@@ -235,14 +235,12 @@ module TransferFunctions = struct
         to_file Heap.pp caller "heap_caller"; to_file Heap.pp callee "heap_callee"; to_file Heap.pp merged "heap_merged"; to_file InstEnv.pp ienv "inst_env"
 
 
-  let graph = ControlFlowGraph.Graph.init ()
-
   let exec_instr : Domain.t -> extras ProcData.t -> CFG.Node.t -> Sil.instr -> Domain.t = 
-    fun {heap; logs} {pdesc; tenv; extras} node instr ->
+    fun {heap; logs; graph} {pdesc; tenv; extras} node instr ->
       let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in
       let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
       (* vvv  Append node into graph  vvv *)
-      let () =
+      let cfg_node =
         let node = match node with (n, i) -> n in
         let kind = match instr with
           | Prune (_, _, true, _) -> ControlFlowGraph.Node.KPruneT
@@ -256,22 +254,23 @@ module TransferFunctions = struct
         let succs = Procdesc.Node.get_succs node in
         let preds = Procdesc.Node.get_preds node in
         let node = ControlFlowGraph.Graph.add_node (kind, loc) graph in
-        List.iter succs (fun n ->
+        List.iter succs ~f:(fun n ->
             let loc = ControlFlowGraph.NodeLoc.mk [proc_name,
                                                    Procdesc.Node.get_id n, -1] in
             ControlFlowGraph.Node.add_succ loc node) ;
-        List.iter preds (fun n ->
+        List.iter preds ~f:(fun n ->
             let loc = ControlFlowGraph.NodeLoc.mk [proc_name,
                                                    Procdesc.Node.get_id n, -1] in
             ControlFlowGraph.Graph.add_pred loc node);
-      () in
+        node
+      in
       (* ^^^  ----------------------  ^^^ *)
       let () = match node with 
         | (n, i) -> L.progress "%s:%a\n@." proc_name Procdesc.Node.pp_id (Procdesc.Node.get_id n) in
       let scope = VVar.mk_scope proc_name in
       match instr with
       | Load (id, e1, typ, loc) when TH.is_not_allowed typ -> ( (* Handling load for global variables *)
-          mk_domain heap logs
+          mk_domain heap logs graph
       )
       | Load (id, e1, typ, loc) when GH.is_global e1 -> ( (* Handling load for global variables *)
           let lhs_addr = Loc.of_id id ~proc:scope in
@@ -280,18 +279,18 @@ module TransferFunctions = struct
               let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
               let glob_v = exec_expr scope loc heap' e1 |> (fun x -> Helper.load x heap') in
               let heap'' = Heap.add lhs_addr glob_v heap' in
-              mk_domain heap'' logs
+              mk_domain heap'' logs graph
           | None -> 
               let rhs_v = exec_expr scope loc heap e1 |> (fun x -> Helper.load x heap) in
               let heap' = Heap.add lhs_addr rhs_v heap in
-              mk_domain heap' logs)
+              mk_domain heap' logs graph)
               
       (*
           let (glob_pvar, glob_typ) = get_global_pvar_and_typ e1 in
           let heap' = GH.inject_dummy_mappings tenv glob_pvar glob_typ heap in
           let glob_v, heap'' = exec_expr scope loc heap' e1 |> (fun x -> Helper.load x heap') in
           let heap''' = Heap.add lhs_addr glob_v heap'' in
-          mk_domain heap''' logs*)
+          mk_domain heap''' logs graph *)
       )
 
       | Load (id, e1, typ, loc) when JniModel.is_jni_env_ptr_for_c typ -> 
@@ -301,23 +300,23 @@ module TransferFunctions = struct
           let heap' = JniModel.put_jni_env_modeling lhs_ptr_ptr_addr heap in
           let heap'' = Heap.add lhs_addr (Val.singleton (lhs_ptr_addr, Cst.cst_true)) heap' in
           let heap''' = Heap.add lhs_ptr_addr (Val.singleton (lhs_ptr_ptr_addr, Cst.cst_true)) heap'' in
-          mk_domain heap''' logs
+          mk_domain heap''' logs graph
 
       | Load (id, e1, typ, loc) -> 
           let lhs_addr = Loc.of_id id ~proc:scope in
           let rhs_v = exec_expr scope loc heap e1 |> (fun x -> Helper.load x heap) in
           let heap' = Heap.add lhs_addr rhs_v heap in
-          mk_domain heap' logs
+          mk_domain heap' logs graph
 
       | Store (Lvar pvar, typ, e2, loc) when TH.is_not_allowed typ -> (* for return statements *)
-          mk_domain heap logs
+          mk_domain heap logs graph
 
       | Store (Lvar pvar, typ, e2, loc) when Pvar.is_return pvar -> (* for return statements *)
           let rhs_v = exec_expr scope loc heap e2 in
           let mname = Typ.Procname.to_string (Procdesc.get_proc_name pdesc) in
           let ret_addr = Loc.mk_ret mname in
           let heap' = Heap.weak_update ret_addr rhs_v heap in
-          mk_domain heap' logs
+          mk_domain heap' logs graph
 
       | Store (e1, typ, e2, loc) when GH.is_global e2 -> ( (* Handling load for global variables *)
           (match get_global_pvar_and_typ_opt e2 with
@@ -326,13 +325,13 @@ module TransferFunctions = struct
               let lhs_v = exec_expr scope loc heap' e1 in
               let rhs_v = exec_expr scope loc heap' e2 in
               let heap'' = Helper.store lhs_v rhs_v heap' in
-              let res = mk_domain heap'' logs in
+              let res = mk_domain heap'' logs graph in
               res
           | None -> 
               let lhs_v = exec_expr scope loc heap e1 in
               let rhs_v = exec_expr scope loc heap e2 in
               let heap' = Helper.store lhs_v rhs_v heap in
-              let res = mk_domain heap' logs in
+              let res = mk_domain heap' logs graph in
               res)
           (*
           let (glob_pvar, glob_typ) = get_global_pvar_and_typ e2 in
@@ -340,7 +339,7 @@ module TransferFunctions = struct
           let lhs_v = exec_expr scope loc heap' e1 in
           let rhs_v = exec_expr scope loc heap' e2 in
           let heap'' = Helper.store lhs_v rhs_v heap' in
-          let res = mk_domain heap'' logs in
+          let res = mk_domain heap'' logs graph in
           res
           *)
       )
@@ -352,13 +351,13 @@ module TransferFunctions = struct
               let lhs_v = exec_expr scope loc heap' e1 in
               let rhs_v = exec_expr scope loc heap' e2 in
               let heap'' = Helper.store lhs_v rhs_v heap' in
-              let res = mk_domain heap'' logs in
+              let res = mk_domain heap'' logs graph in
               res
           | None -> 
               let lhs_v = exec_expr scope loc heap e1 in
               let rhs_v = exec_expr scope loc heap e2 in
               let heap' = Helper.store lhs_v rhs_v heap in
-              let res = mk_domain heap' logs in
+              let res = mk_domain heap' logs graph in
               res)
           (*
           let (glob_pvar, glob_typ) = get_global_pvar_and_typ e1 in
@@ -366,7 +365,7 @@ module TransferFunctions = struct
           let lhs_v = exec_expr scope loc heap' e1 in
           let rhs_v = exec_expr scope loc heap' e2 in
           let heap'' = Helper.store lhs_v rhs_v heap' in
-          let res = mk_domain heap'' logs in
+          let res = mk_domain heap'' logs graph in
           res*)
       )
 
@@ -374,11 +373,11 @@ module TransferFunctions = struct
           let lhs_v = exec_expr scope loc heap e1 in
           let rhs_v = exec_expr scope loc heap e2 in
           let heap' = Helper.store lhs_v rhs_v heap in
-          let res = mk_domain heap' logs in
+          let res = mk_domain heap' logs graph in
           res
             
       | Prune (e, loc, b, i) -> (* do not support heap pruning *)
-          mk_domain heap logs
+          mk_domain heap logs graph
 
       | Call ((id, ret_typ), (Const (Cfun callee_pname)), [(e, typ)], loc, flag) when (Typ.Procname.to_string callee_pname) = "__new" -> ((* for dynamic allocations *)
           try
@@ -388,9 +387,9 @@ module TransferFunctions = struct
             let ptr' = Loc.mk_concrete_pointer ~dyn:true ptr in
             let heap' = Heap.add lhs_addr (Val.singleton (ptr, Cst.cst_true)) heap in
             let heap'' = Heap.add ptr (Val.singleton (ptr', Cst.cst_true)) heap' in
-            mk_domain heap'' logs
+            mk_domain heap'' logs graph
           with _ ->
-            mk_domain heap logs)
+            mk_domain heap logs graph) 
 
       | Call ((id, ret_typ), (Const (Cfun callee_pname)), args, loc, flag) when JniModel.is_jni callee_pname -> (* for jni function calls *)
           let lhs_addr = Loc.of_id id ~proc:scope in
@@ -413,7 +412,7 @@ module TransferFunctions = struct
           let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
           let log = LogUnit.mk [cs] ret_addr jnifun arg_addrs dumped_heap in
           let logs' = CallLogs.add log logs in  
-          mk_domain heap' logs'
+          mk_domain heap' logs' graph
 
       | Call ((id, ret_typ), (Const (Cfun callee_pname)), args, loc, flag) -> 
           let lhs_addr = Loc.of_id ~proc:scope id in
@@ -421,7 +420,7 @@ module TransferFunctions = struct
           | Some callee_desc -> (* no exisiting function: because of functions Infer made *)
               if (Caml.List.length (fun_params callee_desc)) = (Caml.List.length args) then
                 (match get_proc_summary true ~caller:pdesc callee_pname with
-                | Some ({ heap = end_heap; logs = end_logs }, gs) ->
+                | Some ({ heap = end_heap; logs = end_logs; graph = end_graph }, gs) ->
                   let heap' = Heap.optimize ~scope heap in
                   let heap'', args_v = calc_args tenv scope loc heap' args in
                   let args_v' = (* Ignore variadic arguments *)
@@ -468,16 +467,17 @@ module TransferFunctions = struct
                         | None ->
                             heap''' ))
                   in
-                  mk_domain heap'''' logs'
+                  ControlFlowGraph.Graph.merge graph cfg_node end_graph;
+                  mk_domain heap'''' logs' graph
                 | None -> 
                     (*let () = L.progress "Not existing callee. Just ignore this call.\n@." in*)
-                    mk_domain heap logs
-                    )
+                    mk_domain heap logs graph
+                    ) 
               else
-                mk_domain heap logs
+                mk_domain heap logs graph
           | None -> 
               (*let () = L.progress "Not existing callee (empty declaration). Just ignore this call.\n@." in*)
-              mk_domain heap logs)
+              mk_domain heap logs graph)
 
       | Call ((id, ret_typ), e, args, loc, flag) -> 
           let fval = exec_expr scope loc heap e in
@@ -506,18 +506,18 @@ module TransferFunctions = struct
                 CallLogs.add log logs
               else logs) fval logs
             in
-            mk_domain heap' logs'
+            mk_domain heap' logs' graph
           else
-            mk_domain heap logs
+            mk_domain heap logs graph
       | Call _ ->
           (*let () = L.progress "Not support function pointers\n@." in*)
-          mk_domain heap logs
+          mk_domain heap logs graph
 
       | Nullify (pid, loc) -> 
-          mk_domain heap logs
+          mk_domain heap logs graph
 
       | Abstract loc -> 
-          mk_domain heap logs
+          mk_domain heap logs graph
 
       | ExitScope (id_list, loc) -> 
           let heap' =Caml.List.fold_left (fun heap id ->
@@ -531,7 +531,7 @@ module TransferFunctions = struct
                 | None ->
                     heap))) heap id_list
           in
-          mk_domain heap' logs
+          mk_domain heap' logs graph
     
 
   let pp_session_name _node fmt = F.pp_print_string fmt "C/C++ semantic summary analysis" 
@@ -550,7 +550,8 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
       (*  let () = L.progress "Analyzing a function %s\n@." (Typ.Procname.to_string proc_name) in*)
         (*let () = L.progress "ATTRIBUTE:\n%a\n@." ProcAttributes.pp (Procdesc.get_attributes proc_desc) in*)
         let heap = Initializer.init tenv proc_desc in
-        let before_astate = SemanticSummaryDomain.make heap SemanticSummaryDomain.CallLogs.empty in
+        let graph = ControlFlowGraph.Graph.mk_empty () in
+        let before_astate = SemanticSummaryDomain.make heap SemanticSummaryDomain.CallLogs.empty graph in
         let proc_data = ProcData.make_default proc_desc tenv in (
         match Analyzer.compute_post proc_data ~initial:before_astate with
         | Some p -> 
@@ -562,11 +563,11 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
           L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
 
-          ControlFlowGraph.Graph.sort TransferFunctions.graph;
-          L.progress "%a\n@." ControlFlowGraph.Graph.pp TransferFunctions.graph;
+          ControlFlowGraph.Graph.sort graph;
+          L.progress "%a\n@." ControlFlowGraph.Graph.pp graph;
           L.progress "%a\n@."
             ControlFlowGraph.Graph.export_dot
-            TransferFunctions.graph;
+            graph;
 
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some (opt_astate, gstore)}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 
