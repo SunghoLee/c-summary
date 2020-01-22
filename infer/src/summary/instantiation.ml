@@ -226,14 +226,15 @@ let comp_heap base caller callee ienv =
   Heap.fold Heap.add new_heap base*)
 
 (* compose caller and callee logs at call instructions. *)
-let comp_log call_site base callee_logs caller_heap ienv = 
+let comp_log call_site nloc base callee_logs caller_heap ienv = 
   let f = fun log base ->
     let heap' = 
       comp_heap caller_heap caller_heap (LogUnit.get_heap log) ienv 
     in
     let log' = LogUnit.optimize (LogUnit.update_heap heap' log) in
     let log'' = LogUnit.append_call_sites call_site log' in
-    CallLogs.add log'' base
+    let log''' = LogUnit.append_nlocs nloc log'' in
+    CallLogs.add log''' base
   in
   let res = CallLogs.fold f callee_logs base in
   res

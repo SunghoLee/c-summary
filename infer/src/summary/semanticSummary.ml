@@ -243,26 +243,29 @@ module TransferFunctions = struct
       let cfg_node =
         let node = match node with (n, i) -> n in
         let kind = match instr with
-          | Prune (_, _, true, _) -> ControlFlowGraph.Node.KPruneT
-          | Prune (_, _, false, _) -> ControlFlowGraph.Node.KPruneF
-          | ExitScope _ -> ControlFlowGraph.Node.KEnd
-          | Call _ -> ControlFlowGraph.Node.KCall
+          | Prune (_, _, true, _) ->
+              let () = L.progress "Prune T!!!!!\n@." in
+              ControlFlowGraph.Node.KPruneT
+          | Prune (_, _, false, _) ->
+              let () = L.progress "Prune F!!!!!\n@." in
+              ControlFlowGraph.Node.KPruneF
+          | ExitScope _ ->
+              let () = L.progress "Exit Scope!!!!!\n@." in
+              ControlFlowGraph.Node.KEnd
+          | Call _ ->
+              let () = L.progress "Call!!!!!\n@." in
+              ControlFlowGraph.Node.KCall
           | _ -> ControlFlowGraph.Node.KCommon in
         let id = Procdesc.Node.get_id node in
         let idx = ControlFlowGraph.Graph.alloc_idx graph in
         let loc = ControlFlowGraph.NodeLoc.mk [proc_name, id, idx] in
-        let succs = Procdesc.Node.get_succs node in
-        let preds = Procdesc.Node.get_preds node in
-        let node = ControlFlowGraph.Graph.add_node (kind, loc) graph in
-        List.iter succs ~f:(fun n ->
-            let loc = ControlFlowGraph.NodeLoc.mk [proc_name,
-                                                   Procdesc.Node.get_id n, -1] in
-            ControlFlowGraph.Node.add_succ loc node) ;
-        List.iter preds ~f:(fun n ->
-            let loc = ControlFlowGraph.NodeLoc.mk [proc_name,
-                                                   Procdesc.Node.get_id n, -1] in
-            ControlFlowGraph.Graph.add_pred loc node);
-        node
+        let mk_loc_list = List.fold ~init: [] ~f:(fun l n ->
+            let loc = ControlFlowGraph.NodeLoc.mk
+                [proc_name, Procdesc.Node.get_id n, -1] in
+            loc :: l )  in
+        let succ_list = Procdesc.Node.get_succs node |> mk_loc_list in
+        let pred_list = Procdesc.Node.get_preds node |> mk_loc_list in
+        ControlFlowGraph.Graph.add_node kind loc succ_list pred_list graph
       in
       (* ^^^  ----------------------  ^^^ *)
       let () = match node with 
@@ -410,7 +413,10 @@ module TransferFunctions = struct
             args (heap', [])
           in
           let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
-          let log = LogUnit.mk [cs] ret_addr jnifun arg_addrs dumped_heap in
+          let log = LogUnit.mk
+              [cs]
+              cfg_node.ControlFlowGraph.Node.loc
+              ret_addr jnifun arg_addrs dumped_heap in
           let logs' = CallLogs.add log logs in  
           mk_domain heap' logs' graph
 
@@ -451,7 +457,9 @@ module TransferFunctions = struct
                   let () = L.progress "#Instantiation: HeapSize Changed ((%d + %d) -> %d)\n@." (Heap.size heap'') (Heap.size end_heap) (Heap.size heap''') in
                   let _ = read_line () in*)
                   let cs = CallSite.mk proc_name loc.Location.line loc.Location.col in
-                  let logs' = Instantiation.comp_log cs logs end_logs heap''' ienv in
+                  let logs' = Instantiation.comp_log
+                      cs cfg_node.ControlFlowGraph.Node.loc
+                      logs end_logs heap''' ienv in
                   let end_gettimeofday = Unix.gettimeofday () in
                   (*let () = L.progress "\tDone: %f\n@." (end_gettimeofday -. start_gettimeofday) in*)
                   let ret_addr = Loc.mk_ret_of_pname callee_pname in
@@ -502,7 +510,10 @@ module TransferFunctions = struct
             let logs' = Val.fold (fun (l, _) logs -> 
               if Loc.is_jni_fun_pointer l then
                 let jnifun = Loc.get_jni_fun_name_exn l |> JNIFun.of_string in
-                let log = LogUnit.mk [cs] ret_addr jnifun arg_addrs dumped_heap in
+                let log = LogUnit.mk
+                    [cs]
+                    cfg_node.ControlFlowGraph.Node.loc
+                    ret_addr jnifun arg_addrs dumped_heap in
                 CallLogs.add log logs
               else logs) fval logs
             in
@@ -563,6 +574,7 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
           L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
 
+          ControlFlowGraph.Graph.update_link_locs graph;
           ControlFlowGraph.Graph.sort graph;
           L.progress "%a\n@." ControlFlowGraph.Graph.pp graph;
           L.progress "%a\n@."

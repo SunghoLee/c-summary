@@ -102,10 +102,10 @@ let replace_log gs log =
 let replace gs summs =
   let f l s = (
     match s.Summary.payloads.Payloads.semantic_summary with
-    | Some ({heap; logs}, gs') -> (
+    | Some ({heap; logs; graph}, gs') -> (
         let heap' = replace_heap gs heap in
         let log' = replace_log gs logs in
-        let s' = {s with Summary.payloads = { s.Summary.payloads with Payloads.semantic_summary = Some ({heap=heap';logs=log'}, gs')}} in
+        let s' = {s with Summary.payloads = { s.Summary.payloads with Payloads.semantic_summary = Some ({heap=heap';logs=log'; graph}, gs')}} in
         s'::l
         )
     | None ->
@@ -129,10 +129,10 @@ let append_globals_log gs log =
 let append_globals gs summs =
   let f l s = (
     match s.Summary.payloads.Payloads.semantic_summary with
-    | Some ({heap; logs}, gs') -> (
+    | Some ({heap; logs; graph}, gs') -> (
         let heap' = append_globals_heap gs heap in
         let logs' = append_globals_log gs logs in
-        let s' = {s with Summary.payloads = { s.Summary.payloads with Payloads.semantic_summary = Some ({heap = heap'; logs = logs'}, gs') }} in
+        let s' = {s with Summary.payloads = { s.Summary.payloads with Payloads.semantic_summary = Some ({heap = heap'; logs = logs'; graph}, gs') }} in
         s' :: l)
     | None -> l)
   in Caml.List.fold_left f [] summs

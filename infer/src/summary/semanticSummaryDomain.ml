@@ -1020,6 +1020,7 @@ end
 module LogUnit = struct
   type t = 
     { call_sites: CallSite.t list
+    ; nloc: ControlFlowGraph.NodeLoc.t
     ; rloc: Loc.t
     ; jfun: JNIFun.t
     ; args: Loc.t list
@@ -1027,6 +1028,8 @@ module LogUnit = struct
     [@@deriving compare]
 
   let get_call_sites l = l.call_sites
+
+  let get_nloc l = l.nloc
 
   let get_heap l = l.heap
 
@@ -1036,8 +1039,9 @@ module LogUnit = struct
 
   let get_jfun l = l.jfun
 
-  let mk call_sites' rloc' jfun' args' heap' = 
+  let mk call_sites' nloc' rloc' jfun' args' heap' = 
     { call_sites = call_sites'
+    ; nloc = nloc'
     ; rloc = rloc'
     ; jfun = jfun'
     ; args = args'
@@ -1046,8 +1050,16 @@ module LogUnit = struct
   let update_heap heap' l = { l with heap = heap' }
 
   let append_call_sites cs =
-    function {call_sites} as l ->
-      { l with call_sites = cs :: call_sites }
+    function { call_sites } as l -> { l with call_sites = cs :: call_sites }
+
+  let append_nloc nl =
+    function { nloc } as l -> { l with nloc = nl :: nloc }
+
+  let append_nlocs nls =
+    let rec f nloc = function
+      | [] -> nloc
+      | n :: ns -> n :: f nloc ns in
+    function { nloc } as l -> { l with nloc = f nloc nls }
 
   let pp fmt = function {call_sites; rloc; jfun; args; heap} -> 
     let rec pp_list fmt = function

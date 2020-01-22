@@ -208,8 +208,8 @@ let parse_formals is_java
 
 (* sort_logs: sort logs *)
 let sort_logs =
-  let cmp {LogUnit.call_sites=c1} {LogUnit.call_sites=c2} =
-    CallSite.compare_list c1 c2 in
+  let cmp { LogUnit.nloc = l1 } { LogUnit.nloc = l2 } =
+    ControlFlowGraph.NodeLoc.compare_by_idx l1 l2 in
   List.sort cmp
 
 (* solve_dependency: reorder logs by ret-args dependencies *)
@@ -262,7 +262,7 @@ let get_summary_k proc default cb =
 let parse_body state glocs name {heap; logs} =
   CallLogs.fold (fun e l -> e :: l) logs []
   |> sort_logs
-  |> solve_dependency
+  (*|> solve_dependency*)
   |> M.method_body state glocs name heap
   
 (* Generator *)
