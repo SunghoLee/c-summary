@@ -239,21 +239,32 @@ module TransferFunctions = struct
     fun {heap; logs; graph} {pdesc; tenv; extras} node instr ->
       let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in
       let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
+      let () = match node with 
+        | (n, i) -> L.progress "%s:%a\n@." proc_name Procdesc.Node.pp_id (Procdesc.Node.get_id n) in
+      let scope = VVar.mk_scope proc_name in
       (* vvv  Append node into graph  vvv *)
       let cfg_node =
+        let rec try_parse_exp = function
+          | Exp.Var ident ->
+              let ex_loc = Loc.of_id ident ~proc:scope in
+              let () = L.progress "  -- Exp.Var %a\n@." Ident.pp ident in
+              let () = L.progress "  --     Loc %a\n@." Loc.pp ex_loc in
+              ControlFlowGraph.Node.EIsTrue ex_loc
+          | Exp.UnOp (LNot, e, _) ->
+              try_parse_exp e |> ControlFlowGraph.Node.exp_neg
+          | Exp.Lvar pvar ->
+              let () = L.progress "  -- Exp.PVar %a\n@." Pvar.pp_value pvar in
+              ControlFlowGraph.Node.EUnknown
+          | _ -> ControlFlowGraph.Node.EUnknown in
         let node = match node with (n, i) -> n in
         let kind = match instr with
-          | Prune (_, _, true, _) ->
-              let () = L.progress "Prune T!!!!!\n@." in
-              ControlFlowGraph.Node.KPruneT
-          | Prune (_, _, false, _) ->
-              let () = L.progress "Prune F!!!!!\n@." in
-              ControlFlowGraph.Node.KPruneF
+          | Prune (exp, _, true, _) ->
+              ControlFlowGraph.Node.KPruneT (try_parse_exp exp)
+          | Prune (exp, _, false, _) ->
+              ControlFlowGraph.Node.KPruneF (try_parse_exp exp)
           | ExitScope _ ->
-              let () = L.progress "Exit Scope!!!!!\n@." in
               ControlFlowGraph.Node.KEnd
           | Call _ ->
-              let () = L.progress "Call!!!!!\n@." in
               ControlFlowGraph.Node.KCall
           | _ -> ControlFlowGraph.Node.KCommon in
         let id = Procdesc.Node.get_id node in
@@ -268,9 +279,6 @@ module TransferFunctions = struct
         ControlFlowGraph.Graph.add_node kind loc succ_list pred_list graph
       in
       (* ^^^  ----------------------  ^^^ *)
-      let () = match node with 
-        | (n, i) -> L.progress "%s:%a\n@." proc_name Procdesc.Node.pp_id (Procdesc.Node.get_id n) in
-      let scope = VVar.mk_scope proc_name in
       match instr with
       | Load (id, e1, typ, loc) when TH.is_not_allowed typ -> ( (* Handling load for global variables *)
           mk_domain heap logs graph

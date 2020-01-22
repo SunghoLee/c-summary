@@ -91,17 +91,26 @@ end
 
 (* Node for control flow graph *)
 module Node = struct
-  type node_kind =
+  type 'a exp = EUnknown
+              | EIsTrue of 'a
+              | EIsFalse of 'a
+
+  let exp_neg = function
+    | EIsTrue loc -> EIsFalse loc
+    | EIsFalse loc -> EIsTrue loc
+    | x -> x
+
+  type 'a node_kind =
   | KCommon
   | KCall (* Function call *)
   | KCallBegin (* Function call, succ is callee's initial node *)
   | KCallEnd (* Function call, pred is callee's terminal node *)
-  | KPruneT (* True branch *)
-  | KPruneF (* False branch *)
+  | KPruneT of 'a exp (* True branch *)
+  | KPruneF of 'a exp (* False branch *)
   | KEnd (* End of scope *)
 
-  type t =
-    { kind: node_kind;
+  type 'a t =
+    { kind: 'a node_kind;
       loc: NodeLoc.t;
       mutable succ: NodeLocSet.t;
       mutable pred: NodeLocSet.t }
@@ -132,7 +141,7 @@ module Node = struct
 
   (* Predicates *)
   let is_prune { kind } = match kind with
-    | KPruneT | KPruneF -> true
+    | KPruneT _ | KPruneF _ -> true
     | _ -> false
 
   (* pp *)
@@ -141,8 +150,8 @@ module Node = struct
     | KCall -> F.fprintf fmt "Call"
     | KCallBegin -> F.fprintf fmt "Call Begin"
     | KCallEnd -> F.fprintf fmt "Call End"
-    | KPruneT -> F.fprintf fmt "True Prune"
-    | KPruneF -> F.fprintf fmt "False Prune"
+    | KPruneT _ -> F.fprintf fmt "True Prune"
+    | KPruneF _ -> F.fprintf fmt "False Prune"
     | KEnd -> F.fprintf fmt "End"
 
   let pp fmt node =
@@ -152,8 +161,8 @@ module Node = struct
 end
 
 module Graph = struct
-  type t =
-    { mutable nodes: Node.t list; (* nodes *)
+  type 'a t =
+    { mutable nodes: 'a Node.t list; (* nodes *)
       mutable idx: int (* index counter *) }
 
   let mk_empty () = { nodes = []; idx = 0 }
@@ -249,7 +258,7 @@ module Graph = struct
         n.Node.pred <- update_link_loc g n.Node.pred; ())
 
   (* Find Node *)
-  let rec bfs (max_fn: Node.t -> Node.t -> bool) ext_lst (max, vis) g n = 
+  let rec bfs (max_fn: 'a Node.t -> 'a Node.t -> bool) ext_lst (max, vis) g n = 
     if List.exists vis
         ~f:(fun loc -> 0 = NodeLoc.compare_by_idx n.Node.loc loc)
     then (max, vis)
@@ -368,8 +377,8 @@ module Graph = struct
       | Node.KCall -> "diamond" 
       | Node.KCallBegin -> "triangle" 
       | Node.KCallEnd -> "invtriangle" 
-      | Node.KPruneT -> "larrow"
-      | Node.KPruneF -> "rarrow"
+      | Node.KPruneT _ -> "larrow"
+      | Node.KPruneF _ -> "rarrow"
       | Node.KEnd -> "box" in
     F.fprintf fmt "[label=%a shape=%s];"
       export_dot_loc node.Node.loc shape;
@@ -423,6 +432,13 @@ module BlockReconsistution = struct
     if node_has_multiple_succ node
     then find_next_node (NodeLocSet.to_list node.Node.succ) g
     else Graph.get_a_succ node g
+
+  type range = NodeLoc.t * NodeLoc.t
+  and block = BSimple of range
+            | BIfElse of blocks * blocks
+            | BWhile of blocks
+            | BDoWhile of blocks
+  and blocks = block list
 
 end
 

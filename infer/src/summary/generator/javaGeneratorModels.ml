@@ -143,6 +143,7 @@ module ModelHelper = struct
       "Throw", "int";
       "ThrowNew", "int";
       "ExceptionOccurred", "Throwable";
+      "ExceptionCheck", "boolean";
 
       "NewGlobalRef", "Object";
       "EnsureLocalCapacity", "int";

@@ -1107,7 +1107,7 @@ module Domain = struct
   type t = 
     { heap: Heap.t
     ; logs: CallLogs.t
-    ; graph: ControlFlowGraph.Graph.t }
+    ; graph: Loc.t ControlFlowGraph.Graph.t }
 
   let empty = 
     { heap = Heap.empty
