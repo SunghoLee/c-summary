@@ -8,7 +8,7 @@ module P = JoustPretty
 module F = Format
 
 module H = JavaGeneratorModels.ModelHelper
-module S = JavaGeneratorModels.State
+module S = JavaGeneratorModels.GlobalState
 module M = JavaGeneratorModels.SimpleModel
 module G = JavaGeneratorModels.GlobalVars
 
@@ -259,11 +259,12 @@ let get_summary_k proc default cb =
     | Some (ss, _) -> cb s ss
 
 (* parse_body: parse function body and generate method body *)
-let parse_body state glocs name {heap; logs} =
-  CallLogs.fold (fun e l -> e :: l) logs []
-  |> sort_logs
-  (*|> solve_dependency*)
-  |> M.method_body state glocs name heap
+let parse_body state glocs name {heap; logs; graph} =
+  let sorted_logs =
+    CallLogs.fold (fun e l -> e :: l) logs []
+    |> sort_logs in
+  (* |> solve_dependency *)
+  M.method_body state glocs name heap sorted_logs graph
   
 (* Generator *)
 (* PkgClss: (key=Package-Class, value=methods) map *)
@@ -315,11 +316,11 @@ let each_proc_cb' state glocs res s ss proc is_ent procname is_java parsed =
   let attr = Summary.get_attributes s in
   let ret_type = parse_type (attr.ret_type) in
   let kind, is_static, formals = parse_formals is_java attr.formals in
-  let proc = ProcInfo.({name = procname;
-                        kind = kind;
-                        ret_type = ret_type;
-                        is_entry = is_ent;
-                        formals = formals }) in
+  let proc = ProcInfo.({ name = procname;
+                         kind = kind;
+                         ret_type = ret_type;
+                         is_entry = is_ent;
+                         formals = formals }) in
   let body = Y.Block (parse_body state glocs proc ss) in
   insert_method res parsed is_static ret_type formals body
 
