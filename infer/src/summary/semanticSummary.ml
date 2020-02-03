@@ -262,18 +262,16 @@ module TransferFunctions = struct
               ControlFlowGraph.Node.KPruneT (try_parse_exp exp)
           | Prune (exp, _, false, _) ->
               ControlFlowGraph.Node.KPruneF (try_parse_exp exp)
-          | ExitScope _ ->
-              ControlFlowGraph.Node.KEnd
-          | Call _ ->
-              ControlFlowGraph.Node.KCall
+          | ExitScope _ -> ControlFlowGraph.Node.KEnd
+          | Call _ -> ControlFlowGraph.Node.KCall
           | _ -> ControlFlowGraph.Node.KCommon in
         let id = Procdesc.Node.get_id node in
         let idx = ControlFlowGraph.Graph.alloc_idx graph in
         let loc = ControlFlowGraph.NodeLoc.mk [proc_name, id, idx] in
-        let mk_loc_list = List.fold ~init: [] ~f:(fun l n ->
+        let mk_loc_list = List.fold ~init: [] ~f: (fun l n ->
             let loc = ControlFlowGraph.NodeLoc.mk
                 [proc_name, Procdesc.Node.get_id n, -1] in
-            loc :: l )  in
+            loc :: l ) in
         let succ_list = Procdesc.Node.get_succs node |> mk_loc_list in
         let pred_list = Procdesc.Node.get_preds node |> mk_loc_list in
         ControlFlowGraph.Graph.add_node kind loc succ_list pred_list graph
@@ -577,9 +575,9 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
           let opt_astate = Domain.optimize p ~scope:(VVar.mk_scope (Typ.Procname.to_string proc_name)) ~rm_tmp: true in
           let f_heap = opt_astate.Domain.heap in
           let gstore = GlobalHandler.collect_global_store f_heap in
-          (*L.progress "GLOBAL_UPDATE: %a\n@." GlobalHandler.GlobalStore.pp gstore; 
+          L.progress "GLOBAL_UPDATE: %a\n@." GlobalHandler.GlobalStore.pp gstore; 
           L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
-          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
+          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
 
           ControlFlowGraph.Graph.update_link_locs graph;
