@@ -468,17 +468,17 @@ module LocalState = struct
         (match else_s with
              | None -> { s with blocks = BIf (parent, cond, if_s, Some []) }
              | Some else_s ->
-               let if_s = List.rev if_s in
-               let else_s = List.rev else_s in
-               let packed = Y.If (cond, Y.Block if_s, Some (Y.Block else_s)) in
+               let if_s' = List.rev if_s in
+               let else_s' = List.rev else_s in
+               let packed = Y.If (cond, Y.Block if_s', Some (Y.Block else_s')) in
                push_stmt packed { s with blocks = parent })
     | BWhile (parent, cond, stmts) ->
-        let stmts = List.rev stmts in
-        let packed = Y.While (cond, Y.Block stmts) in
+        let stmts' = List.rev stmts in
+        let packed = Y.While (cond, Y.Block stmts') in
         push_stmt packed { s with blocks = parent }
     | BDoWhile (parent, cond, stmts) ->
-        let stmts = List.rev stmts in
-        let packed = Y.Do (Y.Block stmts, cond) in
+        let stmts' = List.rev stmts in
+        let packed = Y.Do (Y.Block stmts', cond) in
         push_stmt packed { s with blocks = parent }
 
   let rec flatten_blocks s = match s.blocks with
@@ -880,6 +880,18 @@ module SimpleModel : GeneratorModel = struct
                   | PIWhile of pt
                   | PIDoWhile of pt * pt
 
+
+  let rec find_next_prune cfg l =
+    match CFG.Graph.find_node l cfg with
+    | None -> None
+    | Some n ->
+        match n.CFG.Node.kind with
+        | CFG.Node.KPruneT v -> Some v
+        | CFG.Node.KPruneF v -> Some v
+        | _ -> match CFG.Node.get_succ_list n with
+          | [x] -> find_next_prune cfg x
+          | _ -> None
+
   let rec find_last_branch cfg p =
     match CFG.Graph.find_node p cfg with
     | None -> None
@@ -889,11 +901,32 @@ module SimpleModel : GeneratorModel = struct
         | _ -> match CFG.Node.get_pred_list n with
           | [x] -> find_last_branch cfg x
           | _ -> None
-                                
+
+  (*let destruct_cond ls e =
+    match Heap.find_opt e ls.LS.gheap with
+    | None ->
+        print_string "Not in heap\n";
+        F.printf "Heap: %a\n" Heap.pp ls.LS.gheap;
+        None
+    | Some x ->
+        print_string "E in heap\n";
+        match Val.elements x with
+      | [] -> None
+      | (l, c) :: xs -> Some (H.simple_destruct_loc ls.LS.glocs l)*)
+  let exp_to_Yexpr ls e =
+    match e with
+    | CFG.Node.EIsTrue e ->
+        H.simple_destruct_loc ls.LS.glocs e
+    | CFG.Node.EIsFalse e ->
+        let dest =
+          H.simple_destruct_loc ls.LS.glocs e in
+        Y.Prefix ("!", dest)
+    | _ -> top
+
   let analysis_node cfg n (ls, stk) =
     let loc = CFG.Node.get_loc n in
     let sort = List.sort CFG.NodeLoc.compare_by_idx in
-    let preds = CFG.Node.get_pred_list n |> sort in
+    let preds = CFG.Node.get_pred_list n |> sort |> List.rev in
     let succs = CFG.Node.get_succ_list n |> sort in 
     let (ls, stk) = match stk with
       | PIWhile e :: ss when CFG.NodeLoc.compare e loc = 0 ->
@@ -902,23 +935,34 @@ module SimpleModel : GeneratorModel = struct
           (LS.pop_block ls, ss)
       | _ -> (ls, stk) in
     match preds, succs with
-    | [p], [s1; s2] -> (* if *)
+    | (p :: ps), [s1; s2] when CFG.NodeLoc.compare p loc > 0 -> (* while *)
+        let cond =
+          match find_next_prune cfg s1 with
+          | None -> top
+          | Some e -> exp_to_Yexpr ls e in
+        (LS.push_block LS.KWhile cond ls, PIWhile p :: stk)
+    | (p :: ps), [s] when CFG.NodeLoc.compare p loc > 0 -> (* do-while *)
+        (match find_last_branch cfg p with
+         | None -> (ls, stk)
+         | Some cond ->
+             let dw = PIDoWhile (cond, p) in
+             let cond =
+               match find_next_prune cfg p with
+               | None -> top
+               | Some e -> exp_to_Yexpr ls e in
+             (LS.push_block LS.KDoWhile cond ls, dw :: stk))
+    | _, [s1; s2] -> (* if start *)
         (match stk with
          | PIDoWhile (cond, _end) :: ss when CFG.NodeLoc.compare cond loc = 0 ->
              (ls, stk)
          | _ ->
-             (LS.push_block LS.KIf top ls, PIIf (s1, s2, None) :: stk)
+             let cond =
+               match find_next_prune cfg s1 with
+               | None -> top
+               | Some e -> exp_to_Yexpr ls e in
+             (LS.push_block LS.KIf cond ls, PIIf (s1, s2, None) :: stk)
         )
-    | [p1; p2], [s1; s2] -> (* while *)
-        (LS.push_block LS.KWhile top ls, PIWhile p2 :: stk)
-    | [p1; p2], [s] when CFG.NodeLoc.compare p2 loc > 0 -> (* do-while *)
-        (match find_last_branch cfg p2 with
-         | None ->
-             (ls, stk)
-         | Some cond ->
-             let dw = PIDoWhile (cond, p2) in
-             (LS.push_block LS.KDoWhile top ls, dw :: stk))
-    | [p1; p2], [s] -> (* if *)
+    | [p1; p2], _ -> (* if end *)
         (match stk with
          | PIIf (_, _, Some _) :: ss -> (LS.pop_block ls, ss) 
          | _ -> (ls, stk))

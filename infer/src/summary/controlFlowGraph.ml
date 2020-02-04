@@ -100,6 +100,11 @@ module Node = struct
     | EIsFalse loc -> EIsTrue loc
     | x -> x
 
+  let exp_to_string to_s top = function
+    | EUnknown -> top
+    | EIsTrue e -> "__isTrue(" ^ to_s e ^ ")"
+    | EIsFalse e -> "__isFalse(" ^ to_s e ^ ")"
+
   type 'a node_kind =
   | KCommon
   | KCall (* Function call *)

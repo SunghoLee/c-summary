@@ -249,7 +249,12 @@ module TransferFunctions = struct
               let ex_loc = Loc.of_id ident ~proc:scope in
               let () = L.progress "  -- Exp.Var %a\n@." Ident.pp ident in
               let () = L.progress "  --     Loc %a\n@." Loc.pp ex_loc in
-              ControlFlowGraph.Node.EIsTrue ex_loc
+              let loc =  match Heap.find_opt ex_loc heap with
+              | None -> ex_loc
+              | Some x -> match Val.elements x with
+                | [] -> ex_loc
+                | (l, c) :: xs -> l in
+              ControlFlowGraph.Node.EIsTrue loc
           | Exp.UnOp (LNot, e, _) ->
               try_parse_exp e |> ControlFlowGraph.Node.exp_neg
           | Exp.Lvar pvar ->
