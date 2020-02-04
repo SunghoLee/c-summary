@@ -144,6 +144,12 @@ module Node = struct
     | KPruneT _ | KPruneF _ -> true
     | _ -> false
 
+  let is_pred_branch node =
+    NodeLocSet.cardinal node.pred >= 2
+
+  let is_succ_branch node =
+    NodeLocSet.cardinal node.succ >= 2
+
   (* pp *)
   let pp_kind fmt t = match t with
     | KCommon -> F.fprintf fmt "Common"
@@ -243,19 +249,19 @@ module Graph = struct
     g.nodes <- List.sort ~compare:(fun { Node.loc = loc1 } { Node.loc = loc2 } ->
         NodeLoc.compare_by_idx loc1 loc2) g.nodes
 
-  let update_link_loc g set =
+  let update_link_loc find g set =
     set |> NodeLocSet.map (fun l ->
       match find_node l g with
         | Some _ -> l
         | None ->
-            match find_node_by_id l g with
+            match find l g with
             | None -> l
             | Some x -> x.Node.loc )
 
   let update_link_locs g =
     List.iter g.nodes ~f:(fun n ->
-        n.Node.succ <- update_link_loc g n.Node.succ;
-        n.Node.pred <- update_link_loc g n.Node.pred; ())
+        n.Node.succ <- update_link_loc find_node_by_id g n.Node.succ;
+        n.Node.pred <- update_link_loc find_node_by_id_gt_idx g n.Node.pred; ())
 
   (* Find Node *)
   let rec bfs (max_fn: 'a Node.t -> 'a Node.t -> bool) ext_lst (max, vis) g n = 
