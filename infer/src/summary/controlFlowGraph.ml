@@ -394,9 +394,12 @@ module Graph = struct
     F.fprintf fmt "[label=%a shape=%s];"
       export_dot_loc node.Node.loc shape;
     node.Node.succ |> NodeLocSet.iter (fun succ ->
-        F.fprintf fmt "%a -> %a;"
-          export_dot_loc node.Node.loc
-          export_dot_loc succ )
+        F.fprintf fmt "%a -> %a"
+            export_dot_loc node.Node.loc
+            export_dot_loc succ;
+        if NodeLoc.compare_by_idx node.Node.loc succ < 0
+        then F.fprintf fmt ";"
+        else F.fprintf fmt " [style=dashed];")
           
   let rec export_dot_nodes fmt nodes = match nodes with
     | [] -> ()
@@ -407,49 +410,84 @@ module Graph = struct
     F.fprintf fmt "digraph graphA { %a }\n@." export_dot_nodes g.nodes
 end
 
-module BlockReconsistution = struct
-  let node_has_multiple_pred node =
-    NodeLocSet.cardinal node.Node.pred >= 2
+module GraphHelper = struct
+  let sort_locs_by_idx lst = List.sort ~compare:NodeLoc.compare_by_idx lst
 
-  let node_has_multiple_succ node =
-    NodeLocSet.cardinal node.Node.succ >= 2
+  let compare_node_by_idx x y = NodeLoc.compare_by_idx x.Node.loc y.Node.loc
 
-  type pred_kind = PDoWhile of NodeLoc.t
-                 | PWhile of NodeLoc.t
-  type pred_kinds = pred_kind list
-  let get_node_pred_kinds node g =
-    NodeLocSet.fold (fun loc (l: pred_kinds) ->
-        if NodeLoc.compare node.Node.loc loc >= 0
-        then l
-        else match Graph.find_node loc g with
-          | None -> l
-          | Some x when Node.is_prune x -> PDoWhile loc :: l
-          | _ -> PWhile loc :: l ) node.Node.pred []
+  let sort_nodes_by_idx lst = List.sort ~compare:compare_node_by_idx lst
 
-  let rec find_next_node locs g =
-    let sorted = List.sort NodeLoc.compare locs in
-    match sorted with
-    | [] -> None
-    | [l] -> Graph.find_node l g
-    | l1 :: l2 :: ls when 0 = NodeLoc.compare l1 l2 -> find_next_node (l2 :: ls) g
-    | l :: ls -> match Graph.find_node l g with
-      | None -> find_next_node ls g
-      | Some x -> match next_node x g with
-        | None -> None
-        | Some x' -> if NodeLoc.compare x.Node.loc x'.Node.loc > 0
-            then find_next_node ls g
-            else find_next_node (x'.Node.loc :: ls) g
-  and next_node node g =
-    if node_has_multiple_succ node
-    then find_next_node (NodeLocSet.to_list node.Node.succ) g
-    else Graph.get_a_succ node g
+  let get_inc_succ_list node =
+    let f x = NodeLoc.compare_by_idx node.Node.loc x < 0 in
+    Node.get_succ_list node
+    |> List.filter ~f: f
+    |> sort_locs_by_idx
 
-  type range = NodeLoc.t * NodeLoc.t
-  and block = BSimple of range
-            | BIfElse of blocks * blocks
-            | BWhile of blocks
-            | BDoWhile of blocks
-  and blocks = block list
+  let get_dec_pred_list node =
+    let f x = NodeLoc.compare_by_idx node.Node.loc x > 0 in
+    Node.get_pred_list node
+    |> List.filter ~f: f
+    |> sort_locs_by_idx
 
+  let loc_list_to_node_list lst g =
+    let f nodes loc = match Graph.find_node loc g with
+      | None -> nodes
+      | Some x -> x :: nodes
+    in List.fold_left ~f:f ~init:[] lst |> List.rev
+
+  let get_inc_succ_node_list node g =
+    loc_list_to_node_list (get_inc_succ_list node) g
+
+  let get_dec_pred_node_list node g =
+    loc_list_to_node_list (get_dec_pred_list node) g
+
+  let rec add_node_to_slist n lst = match lst with
+    | [] -> [n]
+    | x :: xs ->
+        let c = NodeLoc.compare_by_idx x.Node.loc n.Node.loc in
+        if c > 0
+        then x :: add_node_to_slist n xs
+        else if c = 0 then lst else n :: lst
+
+  let append_succs_of node g lst = 
+    let succs = get_inc_succ_list node in
+    let f lst loc =
+      match Graph.find_node loc g with
+      | None -> lst
+      | Some x -> add_node_to_slist x lst
+    in List.fold_left ~f:f ~init:lst succs
+
+  let find_first_common_successor g nodes =
+    let rec f = function
+      | [] -> None
+      | [x] -> Some x
+      | x :: xs -> append_succs_of x g xs |> f in
+    sort_nodes_by_idx nodes |> List.rev |> f
+
+  let rec find_next_prune g loc =
+    match Graph.find_node loc g with
+    | None -> None
+    | Some n ->
+        match n.Node.kind with
+        | Node.KPruneT v -> Some n
+        | Node.KPruneF v -> Some n
+        | _ -> match Node.get_succ_list n with
+          | [x] -> find_next_prune g x
+          | _ -> None
+
+  let rec find_last_branch g loc =
+    match Graph.find_node loc g with
+    | None -> None
+    | Some n ->
+        match Node.get_succ_list n with
+        | [x; y] -> Some loc
+        | _ -> match Node.get_pred_list n with
+          | [x] -> find_last_branch g x
+          | _ -> None
+
+  let find_first_node g =
+    let f fst_opt node = match fst_opt with
+      | Some x when compare_node_by_idx x node < 0 -> Some x
+      | _ -> Some node
+    in List.fold_left ~f:f ~init:None g.Graph.nodes
 end
-

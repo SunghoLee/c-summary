@@ -5,7 +5,12 @@ open SemanticSummaryDomain
 
 module Y = JoustSyntax
 module F = Format
+
 module CFG = ControlFlowGraph
+module CFGG = ControlFlowGraph.Graph
+module CFGN = ControlFlowGraph.Node
+module CFGNLoc = ControlFlowGraph.NodeLoc
+module CFGH = ControlFlowGraph.GraphHelper
 
 module GlobalVars = struct
   module SS = Set.Make(String)
@@ -413,16 +418,18 @@ module LocalState = struct
 
   type t = { glocs: LocSet.t;
              gheap: Heap.t;
-             cfg: Loc.t CFG.Graph.t;
+             cfg: Loc.t CFGG.t;
              proc: ProcInfo.t;
              stack: (string * java_val) list;
-             blocks: block_t }
+             blocks: block_t;
+             vars: stmts }
 
   (* Constructor *)
   let mk_empty glocs gheap cfg proc init_stk =
     { glocs; gheap; cfg; proc;
       stack = init_stk;
-      blocks = BTop [] }
+      blocks = BTop [];
+      vars = [] }
 
   (* Getter *)
   let get_glocs { glocs } = glocs
@@ -482,8 +489,19 @@ module LocalState = struct
         push_stmt packed { s with blocks = parent }
 
   let rec flatten_blocks s = match s.blocks with
-    | BTop lines -> List.rev lines
+    | BTop lines -> List.rev (lines @ s.vars)
     | _ -> pop_block s |> flatten_blocks
+
+  (* vars *)
+  let add_var_stmt stmt s = { s with vars = stmt :: s.vars }
+                             
+  let add_var typ name s =
+    let f_var = Y.{v_mods = []; v_type = typ; v_name = Y.ident name 0} in
+    let obj_typ = Y.TypeName [Y.ident "Object" 0] in
+    let init = Y.(Cast (typ, Cast (obj_typ, Literal "null"))) in
+    let f_init = Some (Y.ExprInit init) in
+    let e = Y.(LocalVar {f_var; f_init}) in
+    add_var_stmt e s
 end
 
 
@@ -507,7 +525,7 @@ module type GeneratorModel = sig
                     ProcInfo.t -> (* procedure information *)
                     Heap.t -> (* heap *)
                     LogUnit.t list -> (* sorted log list *)
-                    Loc.t CFG.Graph.t -> (* control flow graph *)
+                    Loc.t CFGG.t -> (* control flow graph *)
                     Y.stmt list (* generated AST *)
 end
 
@@ -542,13 +560,6 @@ module SimpleModel : GeneratorModel = struct
                       v_name = Y.ident name 0}) in
       Y.LocalVar (Y.({f_var = f_var;
                       f_init = Some (ExprInit init_val)}))
-
-  let mk_defvar typ name =
-    let f_var = Y.({v_mods = [];
-                    v_type = typ;
-                    v_name = Y.ident name 0}) in
-    Y.LocalVar (Y.({f_var = f_var;
-                    f_init = None}))
 
   let get_this_expr proc = match ProcInfo.get_kind proc with
     | Static _ -> Y.Literal "__JNI.ThisClass()"
@@ -756,7 +767,8 @@ module SimpleModel : GeneratorModel = struct
     let ret = LogUnit.get_rloc log
       |> H.simple_destruct_loc' glocs in
     let ls' = match H.get_jni_ret_type mth with
-      | Some t when not (LS.mem_stack ret ls) -> LS.push_stmt (mk_defvar t ret) ls
+      | Some t when not (LS.mem_stack ret ls) ->
+          LS.add_var t ret ls
       | _ -> ls in
     let mk_a = mk_assign (
       match H.get_jni_ret_type mth with
@@ -791,116 +803,12 @@ module SimpleModel : GeneratorModel = struct
 
 
 
-  (* --- OLD WAY --- *)
-  (*
-  type pt = CFG.NodeLoc.t
-  type prune_info = PIIf of pt * pt * (pt option) (* (prune_t, prune_f, end_scope) *)
-                  | PIWhile of pt
-                  | PIDoWhile of pt
-
-  let is_do_while cfg loc =
-    match CFG.Graph.find_node loc cfg with
-    | None -> false
-    | Some n -> match n.CFG.Node.kind with
-        | KPruneT _ -> true
-        | _ -> false
-
-  let classify_preds curr preds =
-    let rec f (pre, post) n =
-      if CFG.NodeLoc.compare_by_idx n curr < 0
-      then (n :: pre, post)
-      else (pre, n :: post) in
-    let (pre, post) = List.fold_left f ([], []) preds in
-    (List.rev pre, List.rev post)
-
-  let check_preds cfg curr preds (ls, stk) =
-    let sorted = List.sort CFG.NodeLoc.compare_by_idx preds in
-    let pre, post = classify_preds curr preds in
-    (* If-else branches *)
-    let n_pre = List.length pre in
-    let rec f n (ls, stk) =
-      if n < 1
-      then (ls, stk)
-      else
-        let (ls, stk) = match stk with
-          | PIIf (_, _, _) :: ss -> (LS.pop_block ls, ss)
-          | _ -> (ls, stk) in
-        f (n - 1) (ls, stk) in
-    let (ls, stk) = f n_pre (ls, stk) in
-    (* Loop branches *)
-    let rev_post = List.rev post in
-    let rec g posts (ls, stk, n_wh) = match posts with
-      | [] -> (ls, stk, n_wh)
-      | p :: ps ->
-          g ps (if is_do_while cfg p
-           then (LS.push_block LS.KDoWhile top ls, PIDoWhile p :: stk, n_wh)
-           else (LS.push_block LS.KWhile top ls, PIWhile p :: stk, n_wh + 1)) in
-    g rev_post (ls, stk, 0)
-
-  let rec check_curr cfg curr (ls, stk) = match stk with
-    | PIWhile p :: ss when 0 = CFG.NodeLoc.compare curr p ->
-        check_curr cfg curr (LS.pop_block ls, ss)
-    | PIDoWhile p :: ss when 0 = CFG.NodeLoc.compare curr p ->
-        check_curr cfg curr (LS.pop_block ls, ss)
-    | _ -> (ls, stk)
-
-  let check_succs cfg curr succs n_wh (ls, stk) =
-    let n_succs = List.length succs in
-    let sorted = List.sort CFG.NodeLoc.compare_by_idx succs in
-    match sorted with
-    | [] -> (ls, stk)
-    | [x] ->
-        (match stk with
-         | PIIf (t, f, None) :: ss when CFG.NodeLoc.compare f x < 0 ->
-             (LS.pop_block ls, PIIf (t, f, Some x) :: ss)
-         | PIIf (t, f, Some e) :: ss when not (CFG.NodeLoc.compare x e < 0) ->
-             (LS.pop_block ls, ss)
-         | _ -> (ls, stk) )
-    | [x; y] when n_wh = 0 ->
-        (LS.push_block LS.KIf (Literal "ZZ") ls, PIIf (x, y, None) :: stk)
-    | [x; y] -> (ls, stk)
-    | _ -> raise (Failure "Unhandled")
-
-  let track_cfg (LS.{cfg} as ls) =
-    let rec f (ls, stk) = function
-      | [] -> (ls, stk)
-      | n :: ns ->
-          let preds = CFG.Node.get_pred_list n in
-          let succs = CFG.Node.get_succ_list n in
-          let curr = CFG.Node.get_loc n in
-          let (ls, stk, n_wh) = check_preds cfg curr preds (ls, stk) in
-          let (ls, stk) = check_curr cfg curr (ls, stk) in
-          let (ls, stk) = check_succs cfg curr succs n_wh (ls, stk) in
-          f (ls, stk) ns
-    in cfg.CFG.Graph.nodes |> f (ls, []) |> fun (ls, stk) -> ls
-     *)
-
-  type pt = CFG.NodeLoc.t
-  type prune_info = PIIf of pt * pt * pt option (* (prune_t, prune_f, end_scope) *)
+  (*---------------------------------------------------------------
+  type pt = CFGNLoc.t
+  type prune_info = PIIf of pt * pt * pt option (* end_scope *)
                   | PIWhile of pt
                   | PIDoWhile of pt * pt
 
-
-  let rec find_next_prune cfg l =
-    match CFG.Graph.find_node l cfg with
-    | None -> None
-    | Some n ->
-        match n.CFG.Node.kind with
-        | CFG.Node.KPruneT v -> Some v
-        | CFG.Node.KPruneF v -> Some v
-        | _ -> match CFG.Node.get_succ_list n with
-          | [x] -> find_next_prune cfg x
-          | _ -> None
-
-  let rec find_last_branch cfg p =
-    match CFG.Graph.find_node p cfg with
-    | None -> None
-    | Some n ->
-        match CFG.Node.get_succ_list n with
-        | [x; y] -> Some p
-        | _ -> match CFG.Node.get_pred_list n with
-          | [x] -> find_last_branch cfg x
-          | _ -> None
 
   (*let destruct_cond ls e =
     match Heap.find_opt e ls.LS.gheap with
@@ -915,49 +823,49 @@ module SimpleModel : GeneratorModel = struct
       | (l, c) :: xs -> Some (H.simple_destruct_loc ls.LS.glocs l)*)
   let exp_to_Yexpr ls e =
     match e with
-    | CFG.Node.EIsTrue e ->
+    | CFGN.EIsTrue e ->
         H.simple_destruct_loc ls.LS.glocs e
-    | CFG.Node.EIsFalse e ->
+    | CFGN.EIsFalse e ->
         let dest =
           H.simple_destruct_loc ls.LS.glocs e in
         Y.Prefix ("!", dest)
     | _ -> top
 
   let analysis_node cfg n (ls, stk) =
-    let loc = CFG.Node.get_loc n in
-    let sort = List.sort CFG.NodeLoc.compare_by_idx in
-    let preds = CFG.Node.get_pred_list n |> sort |> List.rev in
-    let succs = CFG.Node.get_succ_list n |> sort in 
+    let loc = CFGN.get_loc n in
+    let sort = List.sort CFGNLoc.compare_by_idx in
+    let preds = CFGN.get_pred_list n |> sort |> List.rev in
+    let succs = CFGN.get_succ_list n |> sort in 
     let (ls, stk) = match stk with
-      | PIWhile e :: ss when CFG.NodeLoc.compare e loc = 0 ->
+      | PIWhile e :: ss when CFGNLoc.compare e loc = 0 ->
           (LS.pop_block ls, ss)
-      | PIDoWhile (_, e) :: ss when CFG.NodeLoc.compare e loc = 0 ->
+      | PIDoWhile (_, e) :: ss when CFGNLoc.compare e loc = 0 ->
           (LS.pop_block ls, ss)
       | _ -> (ls, stk) in
     match preds, succs with
-    | (p :: ps), [s1; s2] when CFG.NodeLoc.compare p loc > 0 -> (* while *)
+    | (p :: ps), [s1; s2] when CFGNLoc.compare p loc > 0 -> (* while *)
         let cond =
-          match find_next_prune cfg s1 with
+          match CFGH.find_next_prune cfg s1 with
           | None -> top
           | Some e -> exp_to_Yexpr ls e in
         (LS.push_block LS.KWhile cond ls, PIWhile p :: stk)
-    | (p :: ps), [s] when CFG.NodeLoc.compare p loc > 0 -> (* do-while *)
-        (match find_last_branch cfg p with
+    | (p :: ps), [s] when CFGNLoc.compare p loc > 0 -> (* do-while *)
+        (match CFGH.find_last_branch cfg p with
          | None -> (ls, stk)
          | Some cond ->
              let dw = PIDoWhile (cond, p) in
              let cond =
-               match find_next_prune cfg p with
+               match CFGH.find_next_prune cfg p with
                | None -> top
                | Some e -> exp_to_Yexpr ls e in
              (LS.push_block LS.KDoWhile cond ls, dw :: stk))
     | _, [s1; s2] -> (* if start *)
         (match stk with
-         | PIDoWhile (cond, _end) :: ss when CFG.NodeLoc.compare cond loc = 0 ->
+         | PIDoWhile (cond, _end) :: ss when CFGNLoc.compare cond loc = 0 ->
              (ls, stk)
          | _ ->
              let cond =
-               match find_next_prune cfg s1 with
+               match CFGH.find_next_prune cfg s1 with
                | None -> top
                | Some e -> exp_to_Yexpr ls e in
              (LS.push_block LS.KIf cond ls, PIIf (s1, s2, None) :: stk)
@@ -968,7 +876,7 @@ module SimpleModel : GeneratorModel = struct
          | _ -> (ls, stk))
     | _, [s] ->
         (match stk with
-         | PIIf (t, f, None) :: ss when CFG.NodeLoc.compare s f > 0 ->
+         | PIIf (t, f, None) :: ss when CFGNLoc.compare s f > 0 ->
              (LS.pop_block ls, PIIf (t, f, Some s) :: ss)
          | _ -> (ls, stk))
     | _ -> (ls, stk)
@@ -977,20 +885,78 @@ module SimpleModel : GeneratorModel = struct
     let rec f (ls, stk) = function
       | [] -> (ls, stk)
       | n :: ns -> f (analysis_node cfg n (ls, stk)) ns
-    in cfg.CFG.Graph.nodes |> f (ls, []) |> fun (ls, stk) -> ls
+    in cfg.CFGG.nodes |> f (ls, []) |> fun (ls, stk) -> ls
+  ---------------------------------------------------------------*)
 
 
+  let exp_to_Yexpr ls e =
+    match e with
+    | CFGN.EIsTrue e ->
+        H.simple_destruct_loc ls.LS.glocs e
+    | CFGN.EIsFalse e ->
+        let dest =
+          H.simple_destruct_loc ls.LS.glocs e in
+        Y.Prefix ("!", dest)
+    | _ -> top
 
+  type prune_info = PIIf of CFGNLoc.t
+                  | PIIfNot of CFGNLoc.t
+                  | PIWhile of CFGNLoc.t
+                  | PIDoWhile of CFGNLoc.t * CFGNLoc.t
+  type track_state = LS.t * prune_info list
 
+  let analyze_node node (LS.{cfg} as ls, stk) =
+    let succs = CFGH.get_inc_succ_node_list node cfg in
+    match succs with
+    | [] ->
+        let rec f (ls, stk) = match stk with
+          | PIIfNot _ :: ss -> f (LS.pop_block ls, ss)
+          | PIIf l :: ss -> (LS.pop_block ls, PIIfNot l :: ss)
+          | _ -> (ls, stk) in
+        let (ls, stk) = f (ls, stk) in
+        [], ls, stk
+    | [x; y] ->
+        let cond =
+          match CFGH.find_next_prune cfg x.CFGN.loc with
+          | None -> top
+          | Some n ->
+              match n.CFGN.kind with
+              | CFGN.KPruneT v -> exp_to_Yexpr ls v
+              | CFGN.KPruneF v -> exp_to_Yexpr ls v
+              | _ -> top in
+        succs,
+        LS.push_block LS.KIf cond ls,
+        PIIf node.CFGN.loc :: stk
+    | _ -> succs, ls, stk
 
+  let track_possible_paths_of_cfg loc_callback (LS.{cfg} as ls) =
+    match CFGH.find_first_node cfg with
+    | None -> ls
+    | Some n ->
+        let rec f (ls, stk) = function
+          | [] -> ls
+          | x :: xs ->
+              let ls = loc_callback x.CFGN.loc ls in
+              let (nexts, ls, stk) = analyze_node x (ls, stk) in
+              f (ls, stk) (nexts @ xs) in
+        f (ls, []) [n]
+    
 
+  let loc_callback gs logs loc ls =
+    let rec f ls = function
+      | [] -> ls
+      | x :: xs ->
+          let ls' = if 0 = CFGNLoc.compare x.LogUnit.nloc loc
+                    then method_body_sub gs ls x else ls in
+          f ls' xs in
+    f ls logs
 
   (* API *)
   let method_body gs glocs proc heap logs graph =
     let stk = init_stack glocs proc in
     let ls = LS.mk_empty glocs heap graph proc stk in
-    let ls = track_cfg ls in
-    let ls = List.fold_left (method_body_sub gs) ls logs in
+    (*let ls = List.fold_left (method_body_sub gs) ls logs in*)
+    let ls = track_possible_paths_of_cfg (loc_callback gs logs) ls in
     let ls = match method_body_ret ls with
              | None when H.typename_is "void" (ProcInfo.get_ret_type proc) -> ls
              | Some x -> LS.push_stmt x ls
