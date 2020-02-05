@@ -905,41 +905,48 @@ module SimpleModel : GeneratorModel = struct
                   | PIDoWhile of CFGNLoc.t * CFGNLoc.t
   type track_state = LS.t * prune_info list
 
-  let analyze_node node (LS.{cfg} as ls, stk) =
-    let succs = CFGH.get_inc_succ_node_list node cfg in
-    match succs with
-    | [] ->
-        let rec f (ls, stk) = match stk with
-          | PIIfNot _ :: ss -> f (LS.pop_block ls, ss)
-          | PIIf l :: ss -> (LS.pop_block ls, PIIfNot l :: ss)
-          | _ -> (ls, stk) in
-        let (ls, stk) = f (ls, stk) in
-        [], ls, stk
-    | [x; y] ->
-        let cond =
-          match CFGH.find_next_prune cfg x.CFGN.loc with
-          | None -> top
-          | Some n ->
-              match n.CFGN.kind with
-              | CFGN.KPruneT v -> exp_to_Yexpr ls v
-              | CFGN.KPruneF v -> exp_to_Yexpr ls v
-              | _ -> top in
-        succs,
-        LS.push_block LS.KIf cond ls,
-        PIIf node.CFGN.loc :: stk
-    | _ -> succs, ls, stk
+  let analyze_node node (LS.{cfg} as ls, stk, visited) =
+    let rec pop (ls, stk) = match stk with
+      | PIIfNot _ :: ss -> pop (LS.pop_block ls, ss)
+      | PIIf l :: ss -> (LS.pop_block ls, PIIfNot l :: ss)
+      | _ -> (ls, stk) in
+    if CFG.NodeLocSet.mem node.CFGN.loc visited
+    then let ls, stk = pop (ls, stk) in ([], ls, stk, visited)
+    else
+      let v' = CFG.NodeLocSet.add node.CFGN.loc visited in
+      let succs = CFGN.get_succ_list node |> CFGH.sort_locs_by_idx in
+      let succs = CFGH.loc_list_to_node_list succs cfg in
+      match succs with
+      | [] ->
+          let (ls, stk) = pop (ls, stk) in
+          [], ls, stk, v'
+      | [x; y] ->
+          let cond =
+            match CFGH.find_next_prune cfg x.CFGN.loc with
+            | None -> top
+            | Some n ->
+                match n.CFGN.kind with
+                | CFGN.KPruneT v -> exp_to_Yexpr ls v
+                | CFGN.KPruneF v -> exp_to_Yexpr ls v
+                | _ -> top in
+          succs,
+          LS.push_block LS.KIf cond ls,
+          PIIf node.CFGN.loc :: stk,
+          v'
+      | _ -> succs, ls, stk, v'
 
   let track_possible_paths_of_cfg loc_callback (LS.{cfg} as ls) =
     match CFGH.find_first_node cfg with
     | None -> ls
     | Some n ->
-        let rec f (ls, stk) = function
+        let rec f (ls, stk, visited) = function
           | [] -> ls
           | x :: xs ->
-              let ls = loc_callback x.CFGN.loc ls in
-              let (nexts, ls, stk) = analyze_node x (ls, stk) in
-              f (ls, stk) (nexts @ xs) in
-        f (ls, []) [n]
+              let xloc = x.CFGN.loc in
+              let ls = loc_callback xloc ls in
+              let nexts, ls, stk, v' = analyze_node x (ls, stk, visited) in
+              f (ls, stk, v') (nexts @ xs) in
+        f (ls, [], CFG.NodeLocSet.empty) [n]
     
 
   let loc_callback gs logs loc ls =
