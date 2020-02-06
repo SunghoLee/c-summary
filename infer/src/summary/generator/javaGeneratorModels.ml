@@ -407,14 +407,19 @@ type java_val =
 (* LocalState: State for each functions *)
 module LocalState = struct
   type stmts = Y.stmt list
+  type stmts2 = stmts * stmts
+
+  let stmts2_empty = [], []
 
   type block_kind = KIf | KWhile | KDoWhile
 
-  type block_t =
-    | BTop of stmts
-    | BIf of block_t * Y.expr * stmts * stmts option
-    | BWhile of block_t * Y.expr * stmts
-    | BDoWhile of block_t * Y.expr * stmts
+  type block_body =
+    | BTop
+    | BIf of block_t * Y.expr * stmts2 option
+    | BWhile of block_t * Y.expr
+    | BDoWhile of block_t * Y.expr
+    | BReserved of block_t
+  and block_t = block_body * stmts2
 
   type t = { glocs: LocSet.t;
              gheap: Heap.t;
@@ -428,7 +433,7 @@ module LocalState = struct
   let mk_empty glocs gheap cfg proc init_stk =
     { glocs; gheap; cfg; proc;
       stack = init_stk;
-      blocks = BTop [];
+      blocks = BTop, stmts2_empty;
       vars = [] }
 
   (* Getter *)
@@ -453,43 +458,65 @@ module LocalState = struct
   let push_stack name value s =
     { s with stack = (name, value) :: s.stack }
 
+  (* stmts2 *)
+  let stmts2_add_forward stmt (bw, fw) = bw, (stmt :: fw)
+  let stmts2_add_backward stmt (bw, fw) = (stmt :: bw), fw
+  let rec stmts2_flatten (bw, fw) = match fw with
+    | [] -> bw
+    | f :: fs -> stmts2_flatten (f :: bw, fs)
+
   (* Blocks *)
   let push_stmt stmt s = match s.blocks with
-    | BTop stmts -> { s with blocks = BTop (stmt :: stmts) }
-    | BIf (p, c, stmts, o) -> (match o with
-      | None -> { s with blocks = BIf (p, c, stmt :: stmts, None) }
-      | Some ss -> { s with blocks = BIf (p, c, stmts, Some (stmt :: ss)) } )
-    | BWhile (p, c, stmts) -> { s with blocks = BWhile (p, c, stmt :: stmts) }
-    | BDoWhile (p, c, stmts) -> { s with blocks = BDoWhile (p, c, stmt :: stmts) }
+    | body, stmts -> { s with blocks = body, stmts2_add_forward stmt stmts }
+
+  let push_stmt_backward stmt s = match s.blocks with
+    | body, stmts -> { s with blocks = body, stmts2_add_backward stmt stmts }
+
+  let push_stmts_backward stmts s =
+    let rec f s = function
+      | [] -> s
+      | x :: xs -> f (push_stmt_backward x s) xs
+    in f s (List.rev stmts)
 
   let push_block kind cond s =
     let blocks = match kind with
-      | KIf -> BIf (s.blocks, cond, [], None)
-      | KWhile -> BWhile (s.blocks, cond, [])
-      | KDoWhile -> BDoWhile (s.blocks, cond, []) in
-    { s with blocks }
+      | KIf -> BIf (s.blocks, cond, None)
+      | KWhile -> BWhile (s.blocks, cond)
+      | KDoWhile -> BDoWhile (s.blocks, cond) in
+    { s with blocks = blocks, stmts2_empty }
+
+  let push_reserved s = { s with blocks = BReserved s.blocks, stmts2_empty }
 
   let pop_block s = match s.blocks with
-    | BTop _ -> s
-    | BIf (parent, cond, if_s, else_s) ->
-        (match else_s with
-             | None -> { s with blocks = BIf (parent, cond, if_s, Some []) }
-             | Some else_s ->
-               let if_s' = List.rev if_s in
-               let else_s' = List.rev else_s in
+    | BTop, sts ->
+        let lst = stmts2_flatten sts in
+        { s with blocks = BTop, ([], lst) }
+    | BIf (parent, cond, saved_s), sts ->
+        (match saved_s with
+             | None -> { s with blocks = BIf (parent, cond, Some sts), stmts2_empty }
+             | Some if_s ->
+               let if_s' = stmts2_flatten if_s in
+               let else_s' = stmts2_flatten sts in
                let packed = Y.If (cond, Y.Block if_s', Some (Y.Block else_s')) in
                push_stmt packed { s with blocks = parent })
-    | BWhile (parent, cond, stmts) ->
-        let stmts' = List.rev stmts in
+    | BWhile (parent, cond), sts ->
+        let stmts' = stmts2_flatten sts in
         let packed = Y.While (cond, Y.Block stmts') in
         push_stmt packed { s with blocks = parent }
-    | BDoWhile (parent, cond, stmts) ->
-        let stmts' = List.rev stmts in
+    | BDoWhile (parent, cond), sts ->
+        let stmts' = stmts2_flatten sts in
         let packed = Y.Do (Y.Block stmts', cond) in
         push_stmt packed { s with blocks = parent }
+    | BReserved parent, sts ->
+        let stmts' = stmts2_flatten sts in
+        push_stmts_backward stmts' { s with blocks = parent }
 
   let rec flatten_blocks s = match s.blocks with
-    | BTop lines -> List.rev (lines @ s.vars)
+    | BTop, stmts ->
+        let s' = pop_block s in
+        (match s'.blocks with
+        | BTop, ([], fw) -> s', (List.rev s'.vars @ fw)
+        | _ -> failwith "Impossible")
     | _ -> pop_block s |> flatten_blocks
 
   (* vars *)
@@ -498,7 +525,19 @@ module LocalState = struct
   let add_var typ name s =
     let f_var = Y.{v_mods = []; v_type = typ; v_name = Y.ident name 0} in
     let obj_typ = Y.TypeName [Y.ident "Object" 0] in
-    let init = Y.(Cast (typ, Cast (obj_typ, Literal "null"))) in
+    let t = match typ with
+      | Y.TypeName [n] -> Y.id_string n
+      | _ -> "" in
+    let init = Y.Literal (match t with
+                          | "boolean" -> "false"
+                          | "long" -> "0L"
+                          | "float" -> "0.0f"
+                          | "double" -> "0.0"
+                          | "byte" -> "(byte)0"
+                          | "char" -> "(char)0"
+                          | "short" -> "(short)0"
+                          | "int" -> "0"
+                          | _ -> "null") in
     let f_init = Some (Y.ExprInit init) in
     let e = Y.(LocalVar {f_var; f_init}) in
     add_var_stmt e s
@@ -898,57 +937,69 @@ module SimpleModel : GeneratorModel = struct
     in cfg.CFGG.nodes |> f (ls, []) |> fun (ls, stk) -> ls
   ---------------------------------------------------------------*)
 
+  let bool_cast e =
+    let bool_typ = Y.TypeName [Y.ident "Boolean" 0] in
+    Y.(Cast (bool_typ, e))
+
   let top_cond =
     let t = top_with_comment "unknown condition" in
-    let bool_typ = Y.TypeName [Y.ident "Boolean" 0] in
-    Y.(Cast (bool_typ, t))
+    bool_cast t
 
   let exp_to_Yexpr ls e =
     match e with
     | CFGN.EIsTrue e ->
         let s = H.simple_destruct_loc' ls.LS.glocs e in
         if LS.mem_stack s ls
-        then Y.Literal s
-        else top_cond
+        then Some (bool_cast (Y.Literal s))
+        else None 
     | CFGN.EIsFalse e ->
         let s = H.simple_destruct_loc' ls.LS.glocs e in
         if LS.mem_stack s ls
-        then Y.Prefix ("!", Y.Literal s)
-        else top_cond
-    | _ -> top_cond
+        then Some (Y.Prefix ("!", bool_cast (Y.Literal s)))
+        else None
+    | _ -> None
+
+  let condition_to_Yexpr (LS.{cfg} as ls) loc =
+    match CFGH.find_next_prune cfg loc with
+    | None -> None
+    | Some n -> match n.CFGN.kind with
+      | CFGN.KPruneT v -> exp_to_Yexpr ls v
+      | CFGN.KPruneF v -> exp_to_Yexpr ls v
+      | _ -> None
 
   type prune_info = PIIf of CFGNLoc.t * CFG.NodeLocSet.t
                   | PIIfNot of CFGNLoc.t * CFG.NodeLocSet.t
+                  | PITop of CFGNLoc.t * CFG.NodeLocSet.t
+                  | PITopNot of CFGNLoc.t * CFG.NodeLocSet.t
   type track_state = LS.t * prune_info list
 
   let analyze_node node (LS.{cfg} as ls, stk, visited) =
-    let rec pop (ls, stk) = match stk with
-      | PIIfNot _ :: ss -> pop (LS.pop_block ls, ss)
+    let rec pop (ls, stk, vis) = match stk with
+      | PIIfNot (l, v) :: ss -> pop (LS.pop_block ls, ss, vis)
       | PIIf (l, v) :: ss -> (LS.pop_block ls, PIIfNot (l, v) :: ss, v)
-      | _ -> (ls, stk, visited) in
+      | PITopNot (l, v) :: ss -> pop (ls, ss, vis)
+      | PITop (l, v) :: ss -> (LS.pop_block ls, PIIfNot (l, vis) :: ss, vis)
+      | _ -> (ls, stk, vis) in
     if CFG.NodeLocSet.mem node.CFGN.loc visited
-    then let ls, stk, visited = pop (ls, stk) in ([], ls, stk, visited)
+    then let ls, stk, vis = pop (ls, stk, visited) in ([], ls, stk, vis)
     else
       let v' = CFG.NodeLocSet.add node.CFGN.loc visited in
       let succs = CFGN.get_succ_list node |> CFGH.sort_locs_by_idx in
       let succs = CFGH.loc_list_to_node_list succs cfg in
       match succs with
       | [] ->
-          let ls, stk, v'' = pop (ls, stk) in
+          let ls, stk, v'' = pop (ls, stk, v') in
           [], ls, stk, v''
       | [x; y] ->
-          let cond =
-            match CFGH.find_next_prune cfg x.CFGN.loc with
-            | None -> top
-            | Some n ->
-                match n.CFGN.kind with
-                | CFGN.KPruneT v -> exp_to_Yexpr ls v
-                | CFGN.KPruneF v -> exp_to_Yexpr ls v
-                | _ -> top in
-          succs,
-          LS.push_block LS.KIf cond ls,
-          PIIf (node.CFGN.loc, v') :: stk,
-          v'
+          (match condition_to_Yexpr ls x.CFGN.loc with
+            | None ->
+                succs, LS.push_reserved ls,
+                PITop (node.CFGN.loc, v') :: stk, v'
+            | Some e ->
+                succs,
+                LS.push_block LS.KIf e ls,
+                PIIf (node.CFGN.loc, v') :: stk,
+                v')
       | _ -> succs, ls, stk, v'
 
   let track_possible_paths_of_cfg loc_callback (LS.{cfg} as ls) =
@@ -982,9 +1033,11 @@ module SimpleModel : GeneratorModel = struct
       if options.GeneratorOptions.use_prune_info
       then track_possible_paths_of_cfg (loc_callback gs logs) ls
       else List.fold_left (method_body_sub gs) ls logs in
+    let ls, _ = LS.flatten_blocks ls in
     let ls = match method_body_ret ls with
              | None when H.typename_is "void" (ProcInfo.get_ret_type proc) -> ls
              | Some x -> LS.push_stmt x ls
              | _ -> LS.push_stmt (return_top proc) ls in
-    LS.flatten_blocks ls
+    let _, lst = LS.flatten_blocks ls in
+    lst
 end

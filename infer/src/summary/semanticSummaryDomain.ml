@@ -1020,7 +1020,7 @@ end
 module LogUnit = struct
   type t = 
     { call_sites: CallSite.t list
-    ; nloc: ControlFlowGraph.NodeLoc.t
+    ; nloc: ControlFlowGraph.NodeLoc.t [@compare.ignore]
     ; rloc: Loc.t
     ; jfun: JNIFun.t
     ; args: Loc.t list
