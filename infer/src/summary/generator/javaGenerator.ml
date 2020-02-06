@@ -11,6 +11,7 @@ module H = JavaGeneratorModels.ModelHelper
 module S = JavaGeneratorModels.GlobalState
 module M = JavaGeneratorModels.SimpleModel
 module G = JavaGeneratorModels.GlobalVars
+module O = JavaGeneratorModels.GeneratorOptions
 
 module ProcInfo = JavaGeneratorModels.ProcInfo
 
@@ -259,12 +260,12 @@ let get_summary_k proc default cb =
     | Some (ss, _) -> cb s ss
 
 (* parse_body: parse function body and generate method body *)
-let parse_body state glocs name {heap; logs; graph} =
+let parse_body options state glocs name {heap; logs; graph} =
   let sorted_logs =
     CallLogs.fold (fun e l -> e :: l) logs []
     |> sort_logs in
   (* |> solve_dependency *)
-  M.method_body state glocs name heap sorted_logs graph
+  M.method_body options state glocs name heap sorted_logs graph
   
 (* Generator *)
 (* PkgClss: (key=Package-Class, value=methods) map *)
@@ -311,7 +312,7 @@ let gen_compilation_units pkgclss =
       (pkg, cls, mk_compilation_unit p [Y.Class c]) :: b)
     pkgclss []
 
-let each_proc_cb' state glocs res s ss proc is_ent procname is_java parsed = 
+let each_proc_cb' options state glocs res s ss proc is_ent procname is_java parsed = 
   (* F.printf "each_proc_cb': %s\n" procname; *)
   let attr = Summary.get_attributes s in
   let ret_type = parse_type (attr.ret_type) in
@@ -321,7 +322,7 @@ let each_proc_cb' state glocs res s ss proc is_ent procname is_java parsed =
                          ret_type = ret_type;
                          is_entry = is_ent;
                          formals = formals }) in
-  let body = Y.Block (parse_body state glocs proc ss) in
+  let body = Y.Block (parse_body options state glocs proc ss) in
   insert_method res parsed is_static ret_type formals body
 
 let is_global_fn name =
@@ -330,7 +331,7 @@ let is_global_fn name =
   String.length name >= l && String.sub name 0 l = s
 
 (* each_proc_cb: process for procedures *)
-let each_proc_cb state glocs res (proc, is_ent) =
+let each_proc_cb options state glocs res (proc, is_ent) =
   let procname = InferIR.Typ.Procname.to_string proc in
   let optional cond cb = if cond then cb else (fun x -> x) in
   (* F.printf "Current Proc Name: %s\n" procname; *)
@@ -338,7 +339,7 @@ let each_proc_cb state glocs res (proc, is_ent) =
   get_summary_k proc (fun x -> (*F.printf "Failed to get summary %d\n" x;*) res)
     (fun s ss ->
       let cb is_java parsed_name res =
-        each_proc_cb' state glocs res s ss proc
+        each_proc_cb' options state glocs res s ss proc
           is_ent procname is_java parsed_name in
       res |> optional (is_java || option_generate_c_fn) (cb is_java parsed)
           |> S.fold_name_of state procname (cb true)
@@ -369,12 +370,12 @@ let insert_global_var name pkgclss =
   insert_decl pkgclss pkg cls field
 
 (* generate: generate compilation_units from infer-out *)
-let generate () =
+let generate options =
   let procs = get_all_procs () in
   let glocs = load_glocs () in
   (* print_string ("#procs = " ^ string_of_int (List.length procs) ^ "\n"); *)
   let state = S.mk_empty () in
-  List.fold_left (each_proc_cb state glocs) PkgClss.empty procs
+  List.fold_left (each_proc_cb options state glocs) PkgClss.empty procs
   |> G.SS.fold insert_global_var (!G.set)
   |> gen_compilation_units
 
@@ -402,11 +403,47 @@ let write_as_files base_dir result =
             result
 
 (* MAIN *)
+
+let print_help () =
+  let msg =
+    "Usage: " ^ Sys.argv.(0) ^ " <OPTIONS>\n"
+  ^ "Options:\n"
+  ^ " --help: show this message\n"
+  ^ " --prune: generate Java code using prune information\n"
+  in print_string msg
+
+module AppOptions = struct
+  type t = { show_help: bool;
+             prune: bool }
+
+  let default = { show_help = false; prune = false }
+
+  let parse_args args =
+    let result = ref default in
+    for i = 1 to Array.length args - 1 do
+      let arg = args.(i) in
+      if arg = "--help"
+      then result := { !result with show_help = true }
+      else if arg = "--prune"
+      then result := { !result with prune = true }
+      else ()
+    done;
+    !result
+
+  let to_generator_options v =
+    { O.use_prune_info = v.prune }
+end
+
 let _ =
-  print_string "## [JavaGenerator]\n";
-  let result = generate () in
-  write_as_files "java-gen-out" result;
-  () (*result
-  |> List.map (fun (_, _, cmpl) -> make_string cmpl)
-  |> String.concat "\n;;;\n"
-  |> print_string *)
+  let parsed = AppOptions.parse_args Sys.argv in
+  if parsed.AppOptions.show_help
+  then print_help ()
+  else
+    print_string "## [JavaGenerator]\n";
+    let options = AppOptions.to_generator_options parsed in
+    let result = generate options in
+    write_as_files "java-gen-out" result;
+    () (*result
+    |> List.map (fun (_, _, cmpl) -> make_string cmpl)
+    |> String.concat "\n;;;\n"
+    |> print_string *)

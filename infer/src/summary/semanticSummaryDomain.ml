@@ -1161,7 +1161,7 @@ module Domain = struct
       | None ->
           Heap.fold (fun loc _ loclist -> if Loc.is_explicit loc then loc::loclist else loclist) heap [])
     in
-    let heap' = Heap.optimize heap (*~flocs:non_temp_locs*) ?scope ?rm_tmp in
+    let heap' = Heap.optimize heap ~flocs:non_temp_locs ?scope ?rm_tmp in
     let logs' = CallLogs.optimize ?scope logs in
     make heap' logs' graph
 

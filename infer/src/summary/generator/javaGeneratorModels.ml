@@ -506,6 +506,12 @@ end
 
 
 (*--------------------------------------------------------*)
+module GeneratorOptions = struct
+  type t =
+    { use_prune_info: bool }
+end
+
+(*--------------------------------------------------------*)
 module type GeneratorModel = sig
   (* package name of (JNI) model *)
   val model_pkg_name : string
@@ -520,7 +526,8 @@ module type GeneratorModel = sig
   val possible_entries : string list
 
   (* function to parse a procedure  *)
-  val method_body : GlobalState.t ->
+  val method_body : GeneratorOptions.t ->
+                    GlobalState.t ->
                     LocSet.t ->
                     ProcInfo.t -> (* procedure information *)
                     Heap.t -> (* heap *)
@@ -547,8 +554,10 @@ module SimpleModel : GeneratorModel = struct
   let possible_entries = ["main"; "android_main"; "JNI_OnLoad"]
 
   (* return of jni function *)
-  let top = Y.(Call (Name [ident jni_class_name 0;
-                           ident top_name 0], []))
+  let top_y_name = Y.(Name [ident jni_class_name 0; ident top_name 0])
+  let top = Y.(Call (top_y_name, []))
+  let top_with_comment comment =
+    Y.(Call (top_y_name, [Y.Literal ("/* " ^ comment ^ " */")]))
 
   (* make assignment stmt *)
   let mk_assign typ name init_val =
@@ -573,11 +582,11 @@ module SimpleModel : GeneratorModel = struct
           then get_this_expr proc
           else if List.mem_assoc name stk
                then Y.Name [Y.ident name 0]
-               else top
+               else top_with_comment "undeclared"
       | x -> match H.simple_destruct_loc glocs x with
         | Y.Name [id] when not (List.mem_assoc (Y.id_string id) stk) ->
             (* print_string ("TOP for " ^ Y.id_string id ^ "\n"); *)
-            top
+            top_with_comment "undeclared"
         | y -> y
 
   let typed_simple_destruct_loc glocs typ = function
@@ -611,7 +620,8 @@ module SimpleModel : GeneratorModel = struct
                then Y.Name [Y.ident name 0]
                else top
       | x -> match typed_simple_destruct_loc glocs typ x with
-        | Y.Name [id] when not (List.mem_assoc (Y.id_string id) stk) -> top
+        | Y.Name [id] when not (List.mem_assoc (Y.id_string id) stk) ->
+            top
         | y -> y
 
   let typed_destruct_val glocs proc typ stk v =
@@ -888,38 +898,44 @@ module SimpleModel : GeneratorModel = struct
     in cfg.CFGG.nodes |> f (ls, []) |> fun (ls, stk) -> ls
   ---------------------------------------------------------------*)
 
+  let top_cond =
+    let t = top_with_comment "unknown condition" in
+    let bool_typ = Y.TypeName [Y.ident "Boolean" 0] in
+    Y.(Cast (bool_typ, t))
 
   let exp_to_Yexpr ls e =
     match e with
     | CFGN.EIsTrue e ->
-        H.simple_destruct_loc ls.LS.glocs e
+        let s = H.simple_destruct_loc' ls.LS.glocs e in
+        if LS.mem_stack s ls
+        then Y.Literal s
+        else top_cond
     | CFGN.EIsFalse e ->
-        let dest =
-          H.simple_destruct_loc ls.LS.glocs e in
-        Y.Prefix ("!", dest)
-    | _ -> top
+        let s = H.simple_destruct_loc' ls.LS.glocs e in
+        if LS.mem_stack s ls
+        then Y.Prefix ("!", Y.Literal s)
+        else top_cond
+    | _ -> top_cond
 
-  type prune_info = PIIf of CFGNLoc.t
-                  | PIIfNot of CFGNLoc.t
-                  | PIWhile of CFGNLoc.t
-                  | PIDoWhile of CFGNLoc.t * CFGNLoc.t
+  type prune_info = PIIf of CFGNLoc.t * CFG.NodeLocSet.t
+                  | PIIfNot of CFGNLoc.t * CFG.NodeLocSet.t
   type track_state = LS.t * prune_info list
 
   let analyze_node node (LS.{cfg} as ls, stk, visited) =
     let rec pop (ls, stk) = match stk with
       | PIIfNot _ :: ss -> pop (LS.pop_block ls, ss)
-      | PIIf l :: ss -> (LS.pop_block ls, PIIfNot l :: ss)
-      | _ -> (ls, stk) in
+      | PIIf (l, v) :: ss -> (LS.pop_block ls, PIIfNot (l, v) :: ss, v)
+      | _ -> (ls, stk, visited) in
     if CFG.NodeLocSet.mem node.CFGN.loc visited
-    then let ls, stk = pop (ls, stk) in ([], ls, stk, visited)
+    then let ls, stk, visited = pop (ls, stk) in ([], ls, stk, visited)
     else
       let v' = CFG.NodeLocSet.add node.CFGN.loc visited in
       let succs = CFGN.get_succ_list node |> CFGH.sort_locs_by_idx in
       let succs = CFGH.loc_list_to_node_list succs cfg in
       match succs with
       | [] ->
-          let (ls, stk) = pop (ls, stk) in
-          [], ls, stk, v'
+          let ls, stk, v'' = pop (ls, stk) in
+          [], ls, stk, v''
       | [x; y] ->
           let cond =
             match CFGH.find_next_prune cfg x.CFGN.loc with
@@ -931,7 +947,7 @@ module SimpleModel : GeneratorModel = struct
                 | _ -> top in
           succs,
           LS.push_block LS.KIf cond ls,
-          PIIf node.CFGN.loc :: stk,
+          PIIf (node.CFGN.loc, v') :: stk,
           v'
       | _ -> succs, ls, stk, v'
 
@@ -959,11 +975,13 @@ module SimpleModel : GeneratorModel = struct
     f ls logs
 
   (* API *)
-  let method_body gs glocs proc heap logs graph =
+  let method_body options gs glocs proc heap logs graph =
     let stk = init_stack glocs proc in
     let ls = LS.mk_empty glocs heap graph proc stk in
-    (*let ls = List.fold_left (method_body_sub gs) ls logs in*)
-    let ls = track_possible_paths_of_cfg (loc_callback gs logs) ls in
+    let ls =
+      if options.GeneratorOptions.use_prune_info
+      then track_possible_paths_of_cfg (loc_callback gs logs) ls
+      else List.fold_left (method_body_sub gs) ls logs in
     let ls = match method_body_ret ls with
              | None when H.typename_is "void" (ProcInfo.get_ret_type proc) -> ls
              | Some x -> LS.push_stmt x ls

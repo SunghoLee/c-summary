@@ -237,18 +237,18 @@ module TransferFunctions = struct
 
   let exec_instr : Domain.t -> extras ProcData.t -> CFG.Node.t -> Sil.instr -> Domain.t = 
     fun {heap; logs; graph} {pdesc; tenv; extras} node instr ->
-      let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in
+      (*let () = L.progress "%a\n@." PpSumm.pp_inst (node, instr) in*)
       let proc_name = Typ.Procname.to_string @@ Procdesc.get_proc_name pdesc in
-      let () = match node with 
-        | (n, i) -> L.progress "%s:%a\n@." proc_name Procdesc.Node.pp_id (Procdesc.Node.get_id n) in
+      (*let () = match node with 
+        | (n, i) -> L.progress "%s:%a\n@." proc_name Procdesc.Node.pp_id (Procdesc.Node.get_id n) in*)
       let scope = VVar.mk_scope proc_name in
       (* vvv  Append node into graph  vvv *)
       let cfg_node =
         let rec try_parse_exp = function
           | Exp.Var ident ->
               let ex_loc = Loc.of_id ident ~proc:scope in
-              let () = L.progress "  -- Exp.Var %a\n@." Ident.pp ident in
-              let () = L.progress "  --     Loc %a\n@." Loc.pp ex_loc in
+              (*let () = L.progress "  -- Exp.Var %a\n@." Ident.pp ident in*)
+              (*let () = L.progress "  --     Loc %a\n@." Loc.pp ex_loc in*)
               let loc =  match Heap.find_opt ex_loc heap with
               | None -> ex_loc
               | Some x -> match Val.elements x with
@@ -258,7 +258,7 @@ module TransferFunctions = struct
           | Exp.UnOp (LNot, e, _) ->
               try_parse_exp e |> ControlFlowGraph.Node.exp_neg
           | Exp.Lvar pvar ->
-              let () = L.progress "  -- Exp.PVar %a\n@." Pvar.pp_value pvar in
+              (*let () = L.progress "  -- Exp.PVar %a\n@." Pvar.pp_value pvar in*)
               ControlFlowGraph.Node.EUnknown
           | _ -> ControlFlowGraph.Node.EUnknown in
         let node = match node with (n, i) -> n in
@@ -580,17 +580,17 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
           let opt_astate = Domain.optimize p ~scope:(VVar.mk_scope (Typ.Procname.to_string proc_name)) ~rm_tmp: true in
           let f_heap = opt_astate.Domain.heap in
           let gstore = GlobalHandler.collect_global_store f_heap in
-          L.progress "GLOBAL_UPDATE: %a\n@." GlobalHandler.GlobalStore.pp gstore; 
-          L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;
-          L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;
+          (*L.progress "GLOBAL_UPDATE: %a\n@." GlobalHandler.GlobalStore.pp gstore; *)
+          (*L.progress "Final in %s: %a\n@." (Typ.Procname.to_string proc_name) SemanticSummaryDomain.pp opt_astate;*)
+          (*L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
 
           ControlFlowGraph.Graph.update_link_locs graph;
           ControlFlowGraph.Graph.sort graph;
-          L.progress "%a\n@." ControlFlowGraph.Graph.pp graph;
-          L.progress "%a\n@."
+          (*L.progress "%a\n@." ControlFlowGraph.Graph.pp graph;*)
+          (*L.progress "%a\n@."
             ControlFlowGraph.Graph.export_dot
-            graph;
+            graph;*)
 
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some (opt_astate, gstore)}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 
