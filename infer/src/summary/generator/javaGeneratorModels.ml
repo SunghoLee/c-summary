@@ -490,15 +490,15 @@ module LocalState = struct
   let pop_block s = match s.blocks with
     | BTop, sts ->
         let lst = stmts2_flatten sts in
-        { s with blocks = BTop, ([], lst) }
+        { s with blocks = BTop, (lst, []) }
     | BIf (parent, cond, saved_s), sts ->
         (match saved_s with
              | None -> { s with blocks = BIf (parent, cond, Some sts), stmts2_empty }
              | Some if_s ->
-               let if_s' = stmts2_flatten if_s in
-               let else_s' = stmts2_flatten sts in
-               let packed = Y.If (cond, Y.Block if_s', Some (Y.Block else_s')) in
-               push_stmt packed { s with blocks = parent })
+                 let if_s' = stmts2_flatten if_s in
+                 let else_s' = stmts2_flatten sts in
+                 let packed = Y.If (cond, Y.Block if_s', Some (Y.Block else_s')) in
+                 push_stmt packed { s with blocks = parent })
     | BWhile (parent, cond), sts ->
         let stmts' = stmts2_flatten sts in
         let packed = Y.While (cond, Y.Block stmts') in
@@ -515,8 +515,9 @@ module LocalState = struct
     | BTop, stmts ->
         let s' = pop_block s in
         (match s'.blocks with
-        | BTop, ([], fw) -> s', (List.rev s'.vars @ fw)
-        | _ -> failwith "Impossible")
+         | BTop, (bw, []) ->
+             { s' with blocks = BTop, ([], List.rev bw) }, (List.rev s'.vars @ bw)
+         | _ -> failwith "Impossible")
     | _ -> pop_block s |> flatten_blocks
 
   (* vars *)
@@ -978,7 +979,7 @@ module SimpleModel : GeneratorModel = struct
       | PIIfNot (l, v) :: ss -> pop (LS.pop_block ls, ss, vis)
       | PIIf (l, v) :: ss -> (LS.pop_block ls, PIIfNot (l, v) :: ss, v)
       | PITopNot (l, v) :: ss -> pop (ls, ss, vis)
-      | PITop (l, v) :: ss -> (LS.pop_block ls, PIIfNot (l, vis) :: ss, vis)
+      | PITop (l, v) :: ss -> (LS.pop_block ls, PITopNot (l, vis) :: ss, vis)
       | _ -> (ls, stk, vis) in
     if CFG.NodeLocSet.mem node.CFGN.loc visited
     then let ls, stk, vis = pop (ls, stk, visited) in ([], ls, stk, vis)
@@ -993,7 +994,7 @@ module SimpleModel : GeneratorModel = struct
       | [x; y] ->
           (match condition_to_Yexpr ls x.CFGN.loc with
             | None ->
-                succs, LS.push_reserved ls,
+                [y; x], LS.push_reserved ls,
                 PITop (node.CFGN.loc, v') :: stk, v'
             | Some e ->
                 succs,

@@ -27,6 +27,11 @@ module NodeLoc = struct
     function [] -> []
            | {fn; id; sub_id; idx} :: xs ->
                {fn; id; sub_id = sub_id + 1; idx = idx + 1} :: xs
+               
+  let base_idx: t -> t =
+    function [] -> []
+           | {fn; id; sub_id; idx} :: xs ->
+               {fn; id; sub_id = 0; idx = idx - sub_id} :: xs
 
   (* Comparison *)
   let rec mk_list_cmp cmp = function
@@ -229,26 +234,26 @@ module Graph = struct
 
   (* Graph modifiers *)
   let add_node kind loc succ_list pred_list g =
-    let inc_loc = NodeLoc.inc_idx loc in
-    match find_node_by_id_gt_idx inc_loc g with
-    | None -> (
+    let base_loc = NodeLoc.base_idx loc in
+    let inc_loc = NodeLoc.inc_idx base_loc in
+    let try_add loc =
       match find_node_by_id_gt_idx loc g with
-      | None ->
-          let node = Node.mk kind loc succ_list pred_list in
-          g.nodes <- node :: g.nodes;
-          node
-      | Some node when 0 = NodeLoc.compare_by_idx node.Node.loc loc -> node
+      | None -> None
+      | Some node when 0 = NodeLoc.compare_by_idx node.Node.loc loc -> Some node
       | Some node ->
           let new_node = Node.mk kind loc succ_list [node.Node.loc] in
           node.succ <- NodeLocSet.singleton loc;
           g.nodes <- new_node :: g.nodes;
-          new_node
-      )
-    | Some node ->
-        let new_node = Node.mk kind loc succ_list [node.Node.loc] in
-        node.succ <- NodeLocSet.singleton inc_loc;
-        g.nodes <- new_node :: g.nodes;
-        new_node
+          Some new_node
+    in
+    match try_add inc_loc with
+    | Some n -> n
+    | None -> match try_add base_loc with
+      | Some n -> n
+      | None ->
+          let node = Node.mk kind loc succ_list pred_list in
+          g.nodes <- node :: g.nodes;
+          node
 
   let remove_node loc g =
     let rec f s nodes =
