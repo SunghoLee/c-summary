@@ -938,25 +938,30 @@ module SimpleModel : GeneratorModel = struct
     in cfg.CFGG.nodes |> f (ls, []) |> fun (ls, stk) -> ls
   ---------------------------------------------------------------*)
 
-  let bool_cast e =
-    let bool_typ = Y.TypeName [Y.ident "Boolean" 0] in
-    Y.(Cast (bool_typ, e))
+  let is_non_zero e =
+    let fn = Y.(Name [ident jni_class_name 0; ident "IsNonZero" 0]) in
+    Y.(Call (fn, [e]))
+
+  let is_zero e =
+    let fn = Y.(Name [ident jni_class_name 0; ident "IsZero" 0]) in
+    Y.(Call (fn, [e]))
 
   let top_cond =
+    let bool_typ = Y.TypeName [Y.ident "Boolean" 0] in
     let t = top_with_comment "unknown condition" in
-    bool_cast t
+    Y.Cast (bool_typ, t)
 
   let exp_to_Yexpr ls e =
     match e with
     | CFGN.EIsTrue e ->
         let s = H.simple_destruct_loc' ls.LS.glocs e in
         if LS.mem_stack s ls
-        then Some (bool_cast (Y.Literal s))
+        then Some (is_non_zero (Y.Literal s))
         else None 
     | CFGN.EIsFalse e ->
         let s = H.simple_destruct_loc' ls.LS.glocs e in
         if LS.mem_stack s ls
-        then Some (Y.Prefix ("!", bool_cast (Y.Literal s)))
+        then Some (is_zero (Y.Literal s))
         else None
     | _ -> None
 
