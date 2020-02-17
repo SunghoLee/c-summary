@@ -356,7 +356,6 @@ module Graph = struct
     | [] -> () (* DONE *)
     | Node.{ kind; loc; succ; pred } :: ns ->
         let new_n = Node.mk_on kind loc succ pred base_loc in
-        F.printf "--- +++ %a\n" Node.pp new_n;
         g.nodes <- new_n :: g.nodes;
         add_nodes_as_subgraph ns base_loc g
 
@@ -371,20 +370,14 @@ module Graph = struct
             print_string "SSSSSSSSSSSSSSSSomthing goes wrong!!!!!!!!!\n";
             ()
         | Some i, Some t ->
-            F.printf "--- Init: %a\n" Node.pp i;
-            F.printf "--- Term: %a\n" Node.pp t;
             add_nodes_as_subgraph src_g.nodes tgt.Node.loc g;
             let i_loc = tgt.Node.loc @ i.Node.loc in
             let t_loc = tgt.Node.loc @ t.Node.loc in
-            F.printf "--- Init Loc: %a\n" NodeLoc.pp i_loc;
-            F.printf "--- Term Loc: %a\n" NodeLoc.pp t_loc;
             let i_node = find_node i_loc g in
             let t_node = find_node t_loc g in
             match i_node, t_node with
             | None, _ | _, None -> ()
             | Some i, Some t ->
-                F.printf "--- Init Node: %a\n" Node.pp i;
-                F.printf "--- Term Node: %a\n" Node.pp t;
                 remove_node tgt.Node.loc g;
                 let be_loc = tgt.Node.loc in
                 let en_loc = NodeLoc.inc_idx be_loc in
@@ -407,8 +400,6 @@ module Graph = struct
                       |> NodeLocSet.add en_loc);
                 Node.add_pred be_loc i;
                 Node.add_succ en_loc t;
-            F.printf "--- Be: %a\n" Node.pp be;
-            F.printf "--- En: %a\n" Node.pp en;
                 g.nodes <- be :: en :: g.nodes
 
   (* pp *)

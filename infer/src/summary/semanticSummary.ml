@@ -244,6 +244,7 @@ module TransferFunctions = struct
       let scope = VVar.mk_scope proc_name in
       (* vvv  Append node into graph  vvv *)
       let cfg_node =
+        let zero = IntLit.of_int 0 in
         let rec try_parse_exp = function
           | Exp.Var ident ->
               let ex_loc = Loc.of_id ident ~proc:scope in
@@ -257,6 +258,14 @@ module TransferFunctions = struct
               ControlFlowGraph.Node.EIsTrue loc
           | Exp.UnOp (LNot, e, _) ->
               try_parse_exp e |> ControlFlowGraph.Node.exp_neg
+          | Exp.BinOp (Eq, e, Exp.Const zero) ->
+              try_parse_exp e |> ControlFlowGraph.Node.exp_neg
+          | Exp.BinOp (Eq, Exp.Const zero, e) ->
+              try_parse_exp e |> ControlFlowGraph.Node.exp_neg
+          | Exp.BinOp (Ne, e, Exp.Const zero) ->
+              try_parse_exp e
+          | Exp.BinOp (Ne, Exp.Const zero, e) ->
+              try_parse_exp e
           | Exp.Lvar pvar ->
               (*let () = L.progress "  -- Exp.PVar %a\n@." Pvar.pp_value pvar in*)
               ControlFlowGraph.Node.EUnknown
@@ -487,9 +496,9 @@ module TransferFunctions = struct
                             heap''' ))
                   in
                   ControlFlowGraph.Graph.merge graph cfg_node end_graph;
-          L.progress "%a\n@."
+          (*L.progress "%a\n@."
             (ControlFlowGraph.Graph.export_dot "MergedGraph")
-            graph;
+            graph;*)
                   mk_domain heap'''' logs' graph
                 | None -> 
                     (*let () = L.progress "Not existing callee. Just ignore this call.\n@." in*)
@@ -590,10 +599,10 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
 
           ControlFlowGraph.Graph.update_link_locs graph;
           ControlFlowGraph.Graph.sort graph;
-          L.progress "%a\n@." ControlFlowGraph.Graph.pp graph;
+          (*L.progress "%a\n@." ControlFlowGraph.Graph.pp graph;
           L.progress "%a\n@."
             (ControlFlowGraph.Graph.export_dot "FinalGraph")
-            graph;
+            graph;*)
 
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some (opt_astate, gstore)}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 
