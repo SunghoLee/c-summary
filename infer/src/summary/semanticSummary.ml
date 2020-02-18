@@ -250,26 +250,26 @@ module TransferFunctions = struct
               let ex_loc = Loc.of_id ident ~proc:scope in
               (*let () = L.progress "  -- Exp.Var %a\n@." Ident.pp ident in*)
               (*let () = L.progress "  --     Loc %a\n@." Loc.pp ex_loc in*)
-              let loc =  match Heap.find_opt ex_loc heap with
-              | None -> ex_loc
-              | Some x -> match Val.elements x with
-                | [] -> ex_loc
-                | (l, c) :: xs -> l in
-              ControlFlowGraph.Node.EIsTrue loc
+              (match Heap.find_opt ex_loc heap with
+                | None -> ControlFlowGraph.Exp.Unknown
+                | Some x -> match Val.elements x with
+                  | (Loc.Implicit l, c) :: xs ->
+                      ControlFlowGraph.Exp.IsTrue l
+                  | _ -> ControlFlowGraph.Exp.Unknown)
           | Exp.UnOp (LNot, e, _) ->
-              try_parse_exp e |> ControlFlowGraph.Node.exp_neg
+              try_parse_exp e |> ControlFlowGraph.Exp.neg
           | Exp.BinOp (Eq, e, Exp.Const zero) ->
-              try_parse_exp e |> ControlFlowGraph.Node.exp_neg
+              try_parse_exp e |> ControlFlowGraph.Exp.neg
           | Exp.BinOp (Eq, Exp.Const zero, e) ->
-              try_parse_exp e |> ControlFlowGraph.Node.exp_neg
+              try_parse_exp e |> ControlFlowGraph.Exp.neg
           | Exp.BinOp (Ne, e, Exp.Const zero) ->
               try_parse_exp e
           | Exp.BinOp (Ne, Exp.Const zero, e) ->
               try_parse_exp e
           | Exp.Lvar pvar ->
               (*let () = L.progress "  -- Exp.PVar %a\n@." Pvar.pp_value pvar in*)
-              ControlFlowGraph.Node.EUnknown
-          | _ -> ControlFlowGraph.Node.EUnknown in
+              ControlFlowGraph.Exp.Unknown
+          | _ -> ControlFlowGraph.Exp.Unknown in
         let node = match node with (n, i) -> n in
         let kind = match instr with
           | Prune (exp, _, true, _) ->
@@ -597,10 +597,12 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
           (*L.progress "Logs: %a\n@." CallLogs.pp opt_astate.logs;*)
           let session = incr summary.Summary.sessions ; !(summary.Summary.sessions) in
 
+          (*L.progress "%a\n@."
+            (ControlFlowGraph.Graph.export_dot "BeforeUpdate")
+            graph;*)
           ControlFlowGraph.Graph.update_link_locs graph;
-          ControlFlowGraph.Graph.sort graph;
-          (*L.progress "%a\n@." ControlFlowGraph.Graph.pp graph;
-          L.progress "%a\n@."
+          (*L.progress "%a\n@." ControlFlowGraph.Graph.pp graph;*)
+          (*L.progress "%a\n@."
             (ControlFlowGraph.Graph.export_dot "FinalGraph")
             graph;*)
 

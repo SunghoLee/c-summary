@@ -88,44 +88,48 @@ module NodeLoc = struct
 end
 
 (* Set of NodeLoc *)
-module NodeLocSet = struct
-  include PrettyPrintable.MakePPSet(NodeLoc)
+module NodeLocSet = PrettyPrintable.MakePPSet(NodeLoc)
 
-  let to_list set = fold (fun e l -> e :: l) set []
+module Exp = struct
+  type t = Unknown
+         | IsTrue of string
+         | IsFalse of string
+
+  let neg = function
+    | IsTrue loc -> IsFalse loc
+    | IsFalse loc -> IsTrue loc
+    | x -> x
+
+  let to_string to_s top = function
+    | Unknown -> top
+    | IsTrue e -> "__isTrue(" ^ to_s e ^ ")"
+    | IsFalse e -> "__isFalse(" ^ to_s e ^ ")"
 end
 
 (* Node for control flow graph *)
 module Node = struct
-  type 'a exp = EUnknown
-              | EIsTrue of 'a
-              | EIsFalse of 'a
-
-  let exp_neg = function
-    | EIsTrue loc -> EIsFalse loc
-    | EIsFalse loc -> EIsTrue loc
-    | x -> x
-
-  let exp_to_string to_s top = function
-    | EUnknown -> top
-    | EIsTrue e -> "__isTrue(" ^ to_s e ^ ")"
-    | EIsFalse e -> "__isFalse(" ^ to_s e ^ ")"
-
-  type 'a node_kind =
+  type node_kind =
   | KCommon
   | KCall (* Function call *)
   | KCallBegin (* Function call, succ is callee's initial node *)
   | KCallEnd (* Function call, pred is callee's terminal node *)
-  | KPruneT of 'a exp (* True branch *)
-  | KPruneF of 'a exp (* False branch *)
+  | KPruneT of Exp.t (* True branch *)
+  | KPruneF of Exp.t (* False branch *)
   | KEnd (* End of scope *)
 
-  type 'a t =
-    { kind: 'a node_kind;
+  type t =
+    { kind: node_kind;
       loc: NodeLoc.t;
       mutable succ: NodeLocSet.t;
       mutable pred: NodeLocSet.t }
 
   (* Constructors *)
+  let dummy loc =
+    { kind = KCommon;
+      loc;
+      succ = NodeLocSet.empty;
+      pred = NodeLocSet.empty }
+
   let mk kind loc succ_list pred_list =
     { kind;
       loc;
@@ -140,8 +144,8 @@ module Node = struct
   (* Getters *)
   let get_kind { kind } = kind
   let get_loc { loc } = loc
-  let get_succ_list { succ } = NodeLocSet.to_list succ
-  let get_pred_list { pred } = NodeLocSet.to_list pred
+  let get_succ_list { succ } = NodeLocSet.elements succ
+  let get_pred_list { pred } = NodeLocSet.elements pred
 
   (* Modifiers *)
   let add_succ loc node =
@@ -160,6 +164,9 @@ module Node = struct
   let is_succ_branch node =
     NodeLocSet.cardinal node.succ >= 2
 
+  (* Comparisons *)
+  let compare n1 n2 = NodeLoc.compare n1.loc n2.loc
+
   (* pp *)
   let pp_kind fmt t = match t with
     | KCommon -> F.fprintf fmt "Common"
@@ -176,12 +183,16 @@ module Node = struct
     F.fprintf fmt "  -> %a\n" NodeLocSet.pp node.succ
 end
 
+module NodeSet = PrettyPrintable.MakePPSet(Node)
+
 module Graph = struct
-  type 'a t =
-    { mutable nodes: 'a Node.t list; (* nodes *)
+  type t =
+    { mutable nodes: NodeSet.t; (* nodes *)
       mutable idx: int (* index counter *) }
 
-  let mk_empty () = { nodes = []; idx = 0 }
+  let mk_empty () =
+    { nodes = NodeSet.empty;
+      idx = 0 }
 
   (* Index Allocator *)
   let set_idx i g = g.idx <- i; i
@@ -189,46 +200,25 @@ module Graph = struct
   let alloc_idx g = let i = g.idx in g.idx <- g.idx + 2; i
 
   (* Find functions *)
+  let find_nodes_by_id loc g =
+    let f n = NodeLoc.compare_by_id n.Node.loc loc = 0 in
+    NodeSet.filter f g.nodes
+
   (* find_node_by_id: find node by id.
    *   If there are >=1 nodes having same id, choose one with the least idx *)
   let find_node_by_id loc g =
-    let rec f res nodes =
-      match nodes with
-      | [] -> res
-      | n :: ns -> if NodeLoc.compare_by_id n.Node.loc loc <> 0
-          then f res ns
-          else match res with
-            | Some x when NodeLoc.compare_by_idx n.Node.loc x.Node.loc > 0 ->
-                f res ns
-            | _ -> f (Some n) ns
-    in f None g.nodes
+    find_nodes_by_id loc g |> NodeSet.min_elt_opt
 
   (* find_node_by_id_gt_idx: find node by id.
    *   If there are >=1 nodes having same id, choose one with the greatest idx *)
-  let find_node_by_id_gt_idx loc g =
-    let rec f res nodes =
-      match nodes with
-      | [] -> res
-      | n :: ns -> if NodeLoc.compare_by_id n.Node.loc loc <> 0
-          then f res ns
-          else match res with
-            | Some x when NodeLoc.compare_by_idx n.Node.loc x.Node.loc < 0 ->
-                f res ns
-            | _ -> f (Some n) ns
-    in f None g.nodes
+  let find_node_by_id_last loc g =
+    find_nodes_by_id loc g |> NodeSet.max_elt_opt
 
   (* find_node: find node using the given location *)
-  let find_node loc g =
-    let rec f nodes =
-      match nodes with
-      | [] -> None
-      | n :: ns -> if NodeLoc.compare n.Node.loc loc = 0
-          then Some n
-          else f ns
-    in f g.nodes
+  let find_node loc g = NodeSet.find_opt (Node.dummy loc) g.nodes
 
   let get_a_succ node g =
-    match NodeLocSet.to_list node.Node.succ with
+    match NodeLocSet.elements node.Node.succ with
     | [l] -> find_node l g
     | _ -> None
 
@@ -236,178 +226,100 @@ module Graph = struct
   let add_node kind loc succ_list pred_list g =
     let base_loc = NodeLoc.base_idx loc in
     let inc_loc = NodeLoc.inc_idx base_loc in
-    let try_add loc =
-      match find_node_by_id_gt_idx loc g with
+    let try_add l =
+      match find_node_by_id_last l g with
       | None -> None
-      | Some node when 0 = NodeLoc.compare_by_idx node.Node.loc loc -> Some node
       | Some node ->
           let new_node = Node.mk kind loc succ_list [node.Node.loc] in
           node.succ <- NodeLocSet.singleton loc;
-          g.nodes <- new_node :: g.nodes;
+          g.nodes <- NodeSet.add new_node g.nodes;
           Some new_node
     in
     match try_add inc_loc with
     | Some n -> n
-    | None -> match try_add base_loc with
+    | None ->  match try_add base_loc with
       | Some n -> n
       | None ->
           let node = Node.mk kind loc succ_list pred_list in
-          g.nodes <- node :: g.nodes;
+          g.nodes <- NodeSet.add node g.nodes;
           node
 
   let remove_node loc g =
-    let rec f s nodes =
-      match nodes with
-      | [] -> List.rev s
-      | n :: ns -> if NodeLoc.compare n.Node.loc loc = 0
-          then List.rev_append s ns
-          else f (n :: s) ns
-    in g.nodes <- f [] g.nodes
-
-  let sort g =
-    g.nodes <- List.sort ~compare:(fun { Node.loc = loc1 } { Node.loc = loc2 } ->
-        NodeLoc.compare_by_idx loc1 loc2) g.nodes
+    g.nodes <- NodeSet.remove (Node.dummy loc) g.nodes
 
   let update_link_loc find g set =
     set |> NodeLocSet.map (fun l ->
       match find_node l g with
-        | Some _ -> l
-        | None ->
-            match find l g with
-            | None -> l
-            | Some x -> x.Node.loc )
+        | Some _ ->
+            l
+        | None -> match find l g with
+            | None ->
+                l
+            | Some x ->
+                x.Node.loc )
 
   let update_link_locs g =
-    List.iter g.nodes ~f:(fun n ->
+    g.nodes |> NodeSet.iter (fun n ->
         n.Node.succ <- update_link_loc find_node_by_id g n.Node.succ;
-        n.Node.pred <- update_link_loc find_node_by_id_gt_idx g n.Node.pred; ())
+        n.Node.pred <- update_link_loc find_node_by_id_last g n.Node.pred; ())
 
   (* Find Node *)
-      (*
-  let rec bfs (max_fn: 'a Node.t -> 'a Node.t -> bool) ext_lst (max, vis) g n = 
-    if List.exists vis
-        ~f:(fun loc -> 0 = NodeLoc.compare_by_idx n.Node.loc loc)
-    then (max, vis)
-    else
-      let new_max = match max with
-        | Some m when max_fn m n -> Some m
-        | _ -> Some n in
-      List.fold_right (ext_lst g n) 
-        ~f: (fun loc v -> match find_node loc g with
-            | None -> v
-            | Some n' -> bfs max_fn ext_lst v g n')
-        ~init: (new_max, n.Node.loc :: vis)
-
-  let find_from n max_fn ext_lst g =
-    bfs max_fn ext_lst (None, []) g n |> function
-    | Some n, _ -> Some n
-    | _ -> None
-    
-  let find_initial_from n =
-    find_from n
-      (fun a b -> NodeLoc.compare_by_idx a.Node.loc b.Node.loc < 0)
-      (fun _ -> Node.get_pred_list)
-
-  let find_terminal_from n =
-    find_from n
-      (fun a b -> NodeLoc.compare_by_idx a.Node.loc b.Node.loc > 0)
-      (fun _ -> Node.get_succ_list)
-
-  let find_initial g = match g.nodes with
-    | [] -> None
-    | x :: _ -> find_initial_from x g
-         *)
-
-  let find_max_node max_fn g =
-    List.fold_left g.nodes
-      ~f: (fun max v -> match max with
-          | Some w when max_fn w v -> Some w
-          | _ -> Some v)
-      ~init: None
-
-  let find_initial g =
-    find_max_node (fun a b -> NodeLoc.compare_by_idx a.Node.loc b.Node.loc < 0) g
-
-  let find_terminal g =
-    find_max_node (fun a b -> NodeLoc.compare_by_idx a.Node.loc b.Node.loc > 0) g
-
-  (* FCS: First Common Successor  *
-  let get_strict_successor n g =
-    let rec f = function
-      | [] -> None
-      | m :: ms -> match find_node m g with
-        | None -> f ms
-        | Some m -> if NodeLoc.compare_by_idx n.Node.loc m.Node.loc < 0
-            then Some m
-            else f ms in
-    f (Node.get_succ_list n)
-  
-  let rec find_fcs na nb g =
-    let c = NodeLoc.compare_by_idx na.Node.loc nb.Node.loc in
-    if c = 0 then Some na
-    else if c > 0 then find_fcs nb na g
-    else match get_strict_successor na g with
-      | None -> None
-      | Some n -> find_fcs n nb g *)
+  let find_initial g = NodeSet.min_elt_opt g.nodes
+  let find_terminal g = NodeSet.max_elt_opt g.nodes
 
   (* Merge (split `tgt`, connect `tgt_begin` -> src_g -> `tgt_end`) *)
-  let rec add_nodes_as_subgraph nodes base_loc g =
-    match nodes with
-    | [] -> () (* DONE *)
-    | Node.{ kind; loc; succ; pred } :: ns ->
-        let new_n = Node.mk_on kind loc succ pred base_loc in
-        g.nodes <- new_n :: g.nodes;
-        add_nodes_as_subgraph ns base_loc g
+  let add_nodes_as_subgraph nodes base_loc g =
+    nodes |> NodeSet.iter
+      (function Node.{ kind; loc; succ; pred } ->
+          let new_n = Node.mk_on kind loc succ pred base_loc in
+          g.nodes <- NodeSet.add new_n g.nodes)
 
   let merge g tgt src_g =
-    match src_g.nodes with
-    | [] -> (* Nothing to do *) ()
-    | node :: _ ->
-        let init = find_initial src_g in
-        let term = find_terminal src_g in
-        match init, term with
-        | None, _ | _, None ->
-            print_string "SSSSSSSSSSSSSSSSomthing goes wrong!!!!!!!!!\n";
-            ()
-        | Some i, Some t ->
-            add_nodes_as_subgraph src_g.nodes tgt.Node.loc g;
-            let i_loc = tgt.Node.loc @ i.Node.loc in
-            let t_loc = tgt.Node.loc @ t.Node.loc in
-            let i_node = find_node i_loc g in
-            let t_node = find_node t_loc g in
-            match i_node, t_node with
-            | None, _ | _, None -> ()
-            | Some i, Some t ->
-                remove_node tgt.Node.loc g;
-                let be_loc = tgt.Node.loc in
-                let en_loc = NodeLoc.inc_idx be_loc in
-                let be = Node.mk_on Node.KCallBegin
-                                    be_loc
-                                    (NodeLocSet.singleton i.Node.loc)
-                                    tgt.Node.pred
-                                    [] in
-                let en = Node.mk_on Node.KCallEnd
-                                    en_loc
-                                    tgt.Node.succ
-                                    (NodeLocSet.singleton t.Node.loc)
-                                    [] in
-                tgt.Node.succ |> NodeLocSet.iter (fun x ->
-                    match find_node x g with
-                    | None -> ()
-                    | Some n ->
-                        n.Node.pred <- n.Node.pred
-                      |> NodeLocSet.remove tgt.Node.loc
-                      |> NodeLocSet.add en_loc);
-                Node.add_pred be_loc i;
-                Node.add_succ en_loc t;
-                g.nodes <- be :: en :: g.nodes
+    if NodeSet.is_empty g.nodes
+    then ()
+    else
+      let init = find_initial src_g in
+      let term = find_terminal src_g in
+      match init, term with
+      | None, _ | _, None -> ()
+      | Some i, Some t ->
+          add_nodes_as_subgraph src_g.nodes tgt.Node.loc g;
+          let i_loc = tgt.Node.loc @ i.Node.loc in
+          let t_loc = tgt.Node.loc @ t.Node.loc in
+          let i_node = find_node i_loc g in
+          let t_node = find_node t_loc g in
+          match i_node, t_node with
+          | None, _ | _, None -> ()
+          | Some i, Some t ->
+              remove_node tgt.Node.loc g;
+              let be_loc = tgt.Node.loc in
+              let en_loc = NodeLoc.inc_idx be_loc in
+              let be = Node.mk_on Node.KCallBegin
+                                  be_loc
+                                  (NodeLocSet.singleton i.Node.loc)
+                                  tgt.Node.pred
+                                  [] in
+              let en = Node.mk_on Node.KCallEnd
+                                  en_loc
+                                  tgt.Node.succ
+                                  (NodeLocSet.singleton t.Node.loc)
+                                  [] in
+              tgt.Node.succ |> NodeLocSet.iter (fun x ->
+                  match find_node x g with
+                  | None -> ()
+                  | Some n ->
+                      n.Node.pred <- n.Node.pred
+                    |> NodeLocSet.remove tgt.Node.loc
+                    |> NodeLocSet.add en_loc);
+              Node.add_pred be_loc i;
+              Node.add_succ en_loc t;
+              g.nodes <- g.nodes |> NodeSet.add en |> NodeSet.add be
 
   (* pp *)
-  let rec pp_nodes fmt nodes = match nodes with
-    | [] -> F.fprintf fmt "End\n"
-    | n :: ns -> F.fprintf fmt "%a\n" Node.pp n; pp_nodes fmt ns
+  let pp_nodes fmt nodes =
+    nodes |> NodeSet.iter (fun node -> F.fprintf fmt "%a\n" Node.pp node)
 
-  let pp fmt g = F.fprintf fmt "Graph: \n%a\n" pp_nodes g.nodes
+  let pp fmt g = F.fprintf fmt "Graph: \n%a\nEnd\n" pp_nodes g.nodes
 
   (* Dot *)
   let export_dot_loc fmt loc =
@@ -432,11 +344,8 @@ module Graph = struct
         then F.fprintf fmt ";"
         else F.fprintf fmt " [style=dashed];")
           
-  let rec export_dot_nodes fmt nodes = match nodes with
-    | [] -> ()
-    | n :: ns ->
-        export_dot_node fmt n;
-        export_dot_nodes fmt ns
+  let rec export_dot_nodes fmt nodes =
+    nodes |> NodeSet.iter (export_dot_node fmt)
   let export_dot name fmt g =
     F.fprintf fmt "digraph %s { %a }\n@." name export_dot_nodes g.nodes
 end
@@ -488,13 +397,6 @@ module GraphHelper = struct
       | Some x -> add_node_to_slist x lst
     in List.fold_left ~f:f ~init:lst succs
 
-  let find_first_common_successor g nodes =
-    let rec f = function
-      | [] -> None
-      | [x] -> Some x
-      | x :: xs -> append_succs_of x g xs |> f in
-    sort_nodes_by_idx nodes |> List.rev |> f
-
   let rec find_next_prune g loc =
     match Graph.find_node loc g with
     | None -> None
@@ -515,10 +417,4 @@ module GraphHelper = struct
         | _ -> match Node.get_pred_list n with
           | [x] -> find_last_branch g x
           | _ -> None
-
-  let find_first_node g =
-    let f fst_opt node = match fst_opt with
-      | Some x when compare_node_by_idx x node < 0 -> Some x
-      | _ -> Some node
-    in List.fold_left ~f:f ~init:None g.Graph.nodes
 end

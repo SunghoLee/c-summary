@@ -8,6 +8,7 @@ module F = Format
 
 module CFG = ControlFlowGraph
 module CFGG = ControlFlowGraph.Graph
+module CFGE = ControlFlowGraph.Exp
 module CFGN = ControlFlowGraph.Node
 module CFGNLoc = ControlFlowGraph.NodeLoc
 module CFGH = ControlFlowGraph.GraphHelper
@@ -54,16 +55,16 @@ module ModelHelper = struct
     | Loc.Z z -> Z.to_string z
     | Loc.ConstTop -> "__T"
 
+  let simple_destruct_implicit glocs s =
+    if LocSet.mem (Loc.Implicit s) glocs
+    then (GlobalVars.add s; encode_global_full_name s)
+    else "im$$" ^ encode_name s
+
   (* destruct Loc.t and make flat string *)
   let rec simple_destruct_loc' glocs loc = match loc with
     | Loc.Explicit v -> "ex$$" ^ string_of_var v
-    | Loc.Implicit s ->
-        if LocSet.mem loc glocs
-        then (GlobalVars.add s;
-              encode_global_full_name s)
-        else "im$$" ^ encode_name s
-    | Loc.Const v ->
-        simple_destruct_const_typ v
+    | Loc.Implicit s -> simple_destruct_implicit glocs s
+    | Loc.Const v -> simple_destruct_const_typ v
     | Loc.Pointer (p, _, _) -> "ptr$$" ^ simple_destruct_loc' glocs p
     | Loc.FunPointer p -> "fp$$" ^ InferIR.Typ.Procname.to_string p
     | Loc.Offset (u, v) ->
@@ -423,7 +424,7 @@ module LocalState = struct
 
   type t = { glocs: LocSet.t;
              gheap: Heap.t;
-             cfg: Loc.t CFGG.t;
+             cfg: CFGG.t;
              proc: ProcInfo.t;
              stack: (string * java_val) list;
              blocks: block_t;
@@ -572,7 +573,7 @@ module type GeneratorModel = sig
                     ProcInfo.t -> (* procedure information *)
                     Heap.t -> (* heap *)
                     LogUnit.t list -> (* sorted log list *)
-                    Loc.t CFGG.t -> (* control flow graph *)
+                    CFGG.t -> (* control flow graph *)
                     Y.stmt list (* generated AST *)
 end
 
@@ -852,92 +853,6 @@ module SimpleModel : GeneratorModel = struct
     Y.Return (Some v)
 
 
-
-  (*---------------------------------------------------------------
-  type pt = CFGNLoc.t
-  type prune_info = PIIf of pt * pt * pt option (* end_scope *)
-                  | PIWhile of pt
-                  | PIDoWhile of pt * pt
-
-
-  (*let destruct_cond ls e =
-    match Heap.find_opt e ls.LS.gheap with
-    | None ->
-        print_string "Not in heap\n";
-        F.printf "Heap: %a\n" Heap.pp ls.LS.gheap;
-        None
-    | Some x ->
-        print_string "E in heap\n";
-        match Val.elements x with
-      | [] -> None
-      | (l, c) :: xs -> Some (H.simple_destruct_loc ls.LS.glocs l)*)
-  let exp_to_Yexpr ls e =
-    match e with
-    | CFGN.EIsTrue e ->
-        H.simple_destruct_loc ls.LS.glocs e
-    | CFGN.EIsFalse e ->
-        let dest =
-          H.simple_destruct_loc ls.LS.glocs e in
-        Y.Prefix ("!", dest)
-    | _ -> top
-
-  let analysis_node cfg n (ls, stk) =
-    let loc = CFGN.get_loc n in
-    let sort = List.sort CFGNLoc.compare_by_idx in
-    let preds = CFGN.get_pred_list n |> sort |> List.rev in
-    let succs = CFGN.get_succ_list n |> sort in 
-    let (ls, stk) = match stk with
-      | PIWhile e :: ss when CFGNLoc.compare e loc = 0 ->
-          (LS.pop_block ls, ss)
-      | PIDoWhile (_, e) :: ss when CFGNLoc.compare e loc = 0 ->
-          (LS.pop_block ls, ss)
-      | _ -> (ls, stk) in
-    match preds, succs with
-    | (p :: ps), [s1; s2] when CFGNLoc.compare p loc > 0 -> (* while *)
-        let cond =
-          match CFGH.find_next_prune cfg s1 with
-          | None -> top
-          | Some e -> exp_to_Yexpr ls e in
-        (LS.push_block LS.KWhile cond ls, PIWhile p :: stk)
-    | (p :: ps), [s] when CFGNLoc.compare p loc > 0 -> (* do-while *)
-        (match CFGH.find_last_branch cfg p with
-         | None -> (ls, stk)
-         | Some cond ->
-             let dw = PIDoWhile (cond, p) in
-             let cond =
-               match CFGH.find_next_prune cfg p with
-               | None -> top
-               | Some e -> exp_to_Yexpr ls e in
-             (LS.push_block LS.KDoWhile cond ls, dw :: stk))
-    | _, [s1; s2] -> (* if start *)
-        (match stk with
-         | PIDoWhile (cond, _end) :: ss when CFGNLoc.compare cond loc = 0 ->
-             (ls, stk)
-         | _ ->
-             let cond =
-               match CFGH.find_next_prune cfg s1 with
-               | None -> top
-               | Some e -> exp_to_Yexpr ls e in
-             (LS.push_block LS.KIf cond ls, PIIf (s1, s2, None) :: stk)
-        )
-    | [p1; p2], _ -> (* if end *)
-        (match stk with
-         | PIIf (_, _, Some _) :: ss -> (LS.pop_block ls, ss) 
-         | _ -> (ls, stk))
-    | _, [s] ->
-        (match stk with
-         | PIIf (t, f, None) :: ss when CFGNLoc.compare s f > 0 ->
-             (LS.pop_block ls, PIIf (t, f, Some s) :: ss)
-         | _ -> (ls, stk))
-    | _ -> (ls, stk)
-
-  let track_cfg (LS.{cfg} as ls) = 
-    let rec f (ls, stk) = function
-      | [] -> (ls, stk)
-      | n :: ns -> f (analysis_node cfg n (ls, stk)) ns
-    in cfg.CFGG.nodes |> f (ls, []) |> fun (ls, stk) -> ls
-  ---------------------------------------------------------------*)
-
   let is_non_zero e =
     let fn = Y.(Name [ident jni_class_name 0; ident "IsNonZero" 0]) in
     Y.(Call (fn, [e]))
@@ -953,13 +868,13 @@ module SimpleModel : GeneratorModel = struct
 
   let exp_to_Yexpr ls e =
     match e with
-    | CFGN.EIsTrue e ->
-        let s = H.simple_destruct_loc' ls.LS.glocs e in
+    | CFGE.IsTrue e ->
+        let s = H.simple_destruct_implicit ls.LS.glocs e in
         if LS.mem_stack s ls
         then Some (is_non_zero (Y.Literal s))
         else None 
-    | CFGN.EIsFalse e ->
-        let s = H.simple_destruct_loc' ls.LS.glocs e in
+    | CFGE.IsFalse e ->
+        let s = H.simple_destruct_implicit ls.LS.glocs e in
         if LS.mem_stack s ls
         then Some (is_zero (Y.Literal s))
         else None
@@ -1009,7 +924,7 @@ module SimpleModel : GeneratorModel = struct
       | _ -> succs, ls, stk, v'
 
   let track_possible_paths_of_cfg loc_callback (LS.{cfg} as ls) =
-    match CFGH.find_first_node cfg with
+    match CFGG.find_initial cfg with
     | None -> ls
     | Some n ->
         let rec f (ls, stk, visited) = function
