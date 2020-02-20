@@ -188,16 +188,22 @@ module NodeSet = PrettyPrintable.MakePPSet(Node)
 module Graph = struct
   type t =
     { mutable nodes: NodeSet.t; (* nodes *)
-      mutable idx: int (* index counter *) }
+      mutable idx: int; (* index counter *)
+      mutable containing_jni_call: bool }
 
   let mk_empty () =
     { nodes = NodeSet.empty;
-      idx = 0 }
+      idx = 0;
+      containing_jni_call = false }
 
   (* Index Allocator *)
   let set_idx i g = g.idx <- i; i
   let get_idx g = g.idx
   let alloc_idx g = let i = g.idx in g.idx <- g.idx + 2; i
+
+  (* has_jni flag *)
+  let has_jni g = g.containing_jni_call
+  let mark_jni g = g.containing_jni_call <- true
 
   (* Find functions *)
   let find_nodes_by_id loc g =
@@ -417,4 +423,29 @@ module GraphHelper = struct
         | _ -> match Node.get_pred_list n with
           | [x] -> find_last_branch g x
           | _ -> None
+
+
+
+
+  let rec mark_node_locs g (ws, set) =
+    match NodeLocSet.min_elt_opt ws with
+    | None -> ws, set
+    | Some loc ->
+        let set' = NodeLocSet.add loc set in
+        let ws' = NodeLocSet.remove loc ws in
+        let ws'', set'' =
+          match Graph.find_node loc g with
+          | None -> ws', set'
+          | Some x ->
+              let f l ws = if NodeLoc.compare loc l < 0
+                then NodeLocSet.add l ws
+                else ws in
+              NodeLocSet.fold f x.Node.succ ws', set' in
+        mark_node_locs g (ws'', set'')
+
+  let find_common_succs g a b =
+    let _, a_set = mark_node_locs g (NodeLocSet.singleton a, NodeLocSet.empty) in
+    let _, b_set = mark_node_locs g (NodeLocSet.singleton b, NodeLocSet.empty) in
+    NodeLocSet.inter a_set b_set
+
 end

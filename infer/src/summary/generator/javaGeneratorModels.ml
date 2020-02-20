@@ -10,7 +10,9 @@ module CFG = ControlFlowGraph
 module CFGG = ControlFlowGraph.Graph
 module CFGE = ControlFlowGraph.Exp
 module CFGN = ControlFlowGraph.Node
+module CFGNSet = ControlFlowGraph.NodeSet
 module CFGNLoc = ControlFlowGraph.NodeLoc
+module CFGNLSet = ControlFlowGraph.NodeLocSet
 module CFGH = ControlFlowGraph.GraphHelper
 
 module GlobalVars = struct
@@ -498,7 +500,12 @@ module LocalState = struct
              | Some if_s ->
                  let if_s' = stmts2_flatten if_s in
                  let else_s' = stmts2_flatten sts in
-                 let packed = Y.If (cond, Y.Block if_s', Some (Y.Block else_s')) in
+                 let if_b = match if_s' with
+                   | [] -> Y.Empty
+                   | _ -> Y.Block if_s' in
+                 let packed = match else_s' with
+                   | [] -> Y.If (cond, if_b, None)
+                   | _ -> Y.If (cond, if_b, Some (Y.Block else_s')) in
                  push_stmt packed { s with blocks = parent })
     | BWhile (parent, cond), sts ->
         let stmts' = stmts2_flatten sts in
@@ -888,40 +895,55 @@ module SimpleModel : GeneratorModel = struct
       | CFGN.KPruneF v -> exp_to_Yexpr ls v
       | _ -> None
 
-  type prune_info = PIIf of CFGNLoc.t * CFG.NodeLocSet.t
-                  | PIIfNot of CFGNLoc.t * CFG.NodeLocSet.t
-                  | PITop of CFGNLoc.t * CFG.NodeLocSet.t
-                  | PITopNot of CFGNLoc.t * CFG.NodeLocSet.t
+  type prune_info = PIIf of CFGNLoc.t * CFGNLSet.t * CFGNLSet.t
+                  | PIIfNot of CFGNLoc.t * CFGNLSet.t * CFGNLSet.t
+                  | PITop of CFGNLoc.t * CFGNLSet.t
+                  | PITopNot of CFGNLoc.t * CFGNLSet.t
   type track_state = LS.t * prune_info list
+
+  let is_end_of_track node stk visited =
+    if CFGNLSet.mem node.CFGN.loc visited
+    then true
+    else match stk with
+      | PIIf (_, _, cs) :: _ -> CFGNLSet.mem node.CFGN.loc cs
+      | PIIfNot (_, _, cs) :: _ -> CFGNLSet.mem node.CFGN.loc cs
+      | _ -> false
 
   let analyze_node node (LS.{cfg} as ls, stk, visited) =
     let rec pop (ls, stk, vis) = match stk with
-      | PIIfNot (l, v) :: ss -> pop (LS.pop_block ls, ss, vis)
-      | PIIf (l, v) :: ss -> (LS.pop_block ls, PIIfNot (l, v) :: ss, v)
+      | PIIfNot (_, _, _) :: ss -> pop (LS.pop_block ls, ss, vis)
+      | PIIf (l, v, cs) :: ss -> (LS.pop_block ls, PIIfNot (l, v, cs) :: ss, v)
       | PITopNot (l, v) :: ss -> pop (ls, ss, vis)
       | PITop (l, v) :: ss -> (LS.pop_block ls, PITopNot (l, vis) :: ss, vis)
       | _ -> (ls, stk, vis) in
-    if CFG.NodeLocSet.mem node.CFGN.loc visited
+    if CFGNLSet.mem node.CFGN.loc visited
     then let ls, stk, vis = pop (ls, stk, visited) in ([], ls, stk, vis)
     else
-      let v' = CFG.NodeLocSet.add node.CFGN.loc visited in
-      let succs = CFGN.get_succ_list node |> CFGH.sort_locs_by_idx in
-      let succs = CFGH.loc_list_to_node_list succs cfg in
-      match succs with
-      | [] ->
-          let ls, stk, v'' = pop (ls, stk, v') in
-          [], ls, stk, v''
-      | [x; y] ->
-          (match condition_to_Yexpr ls x.CFGN.loc with
-            | None ->
-                [y; x], LS.push_reserved ls,
-                PITop (node.CFGN.loc, v') :: stk, v'
-            | Some e ->
-                succs,
-                LS.push_block LS.KIf e ls,
-                PIIf (node.CFGN.loc, v') :: stk,
-                v')
-      | _ -> succs, ls, stk, v'
+      match stk with
+      | PIIf (l, v, cs) :: ss when CFGNLSet.mem node.CFGN.loc cs ->
+          [], LS.pop_block ls, PIIfNot (l, v, cs) :: ss, visited
+      | PIIfNot (_, _, cs) :: ss when CFGNLSet.mem node.CFGN.loc cs ->
+          [node], LS.pop_block ls, ss, visited
+      | _ ->
+        let v' = CFGNLSet.add node.CFGN.loc visited in
+        let succs = CFGN.get_succ_list node |> CFGH.sort_locs_by_idx in
+        let succs = CFGH.loc_list_to_node_list succs cfg in
+        match succs with
+        | [] ->
+            let ls, stk, v'' = pop (ls, stk, v') in
+            [], ls, stk, v''
+        | [x; y] ->
+            (match condition_to_Yexpr ls x.CFGN.loc with
+              | None ->
+                  [y; x], LS.push_reserved ls,
+                  PITop (node.CFGN.loc, v') :: stk, v'
+              | Some e ->
+                  let cs = CFGH.find_common_succs cfg (x.CFGN.loc) (y.CFGN.loc) in
+                  succs,
+                  LS.push_block LS.KIf e ls,
+                  PIIf (node.CFGN.loc, v', cs) :: stk,
+                  v')
+        | _ -> succs, ls, stk, v'
 
   let track_possible_paths_of_cfg loc_callback (LS.{cfg} as ls) =
     match CFGG.find_initial cfg with
@@ -945,6 +967,8 @@ module SimpleModel : GeneratorModel = struct
                     then method_body_sub gs ls x else ls in
           f ls' xs in
     f ls logs
+
+
 
   (* API *)
   let method_body options gs glocs proc heap logs graph =

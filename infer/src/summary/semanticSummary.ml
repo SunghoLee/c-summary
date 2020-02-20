@@ -438,6 +438,7 @@ module TransferFunctions = struct
               cfg_node.ControlFlowGraph.Node.loc
               ret_addr jnifun arg_addrs dumped_heap in
           let logs' = CallLogs.add log logs in  
+          ControlFlowGraph.Graph.mark_jni graph;
           mk_domain heap' logs' graph
 
       | Call ((id, ret_typ), (Const (Cfun callee_pname)), args, loc, flag) -> 
@@ -495,7 +496,10 @@ module TransferFunctions = struct
                         | None ->
                             heap''' ))
                   in
-                  ControlFlowGraph.Graph.merge graph cfg_node end_graph;
+                  if not (CallLogs.is_empty end_logs)
+                  (*if ControlFlowGraph.Graph.has_jni end_graph*)
+                  then (ControlFlowGraph.Graph.merge graph cfg_node end_graph;
+                        ControlFlowGraph.Graph.mark_jni graph);
           (*L.progress "%a\n@."
             (ControlFlowGraph.Graph.export_dot "MergedGraph")
             graph;*)
