@@ -606,9 +606,9 @@ let checker {Callbacks.proc_desc; tenv; summary} : Summary.t =
             graph;*)
           ControlFlowGraph.Graph.update_link_locs graph;
           (*L.progress "%a\n@." ControlFlowGraph.Graph.pp graph;*)
-          (*L.progress "%a\n@."
+          L.progress "%a\n@."
             (ControlFlowGraph.Graph.export_dot "FinalGraph")
-            graph;*)
+            graph;
 
           {summary with Summary.payloads = { summary.Summary.payloads with Payloads.semantic_summary = Some (opt_astate, gstore)}; Summary.proc_desc = proc_desc; Summary.sessions = ref session}
         | None -> 

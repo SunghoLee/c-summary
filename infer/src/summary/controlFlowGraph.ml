@@ -427,25 +427,32 @@ module GraphHelper = struct
 
 
 
-  let rec mark_node_locs g (ws, set) =
-    match NodeLocSet.min_elt_opt ws with
-    | None -> ws, set
-    | Some loc ->
-        let set' = NodeLocSet.add loc set in
-        let ws' = NodeLocSet.remove loc ws in
-        let ws'', set'' =
-          match Graph.find_node loc g with
-          | None -> ws', set'
-          | Some x ->
-              let f l ws = if NodeLoc.compare loc l < 0
-                then NodeLocSet.add l ws
-                else ws in
-              NodeLocSet.fold f x.Node.succ ws', set' in
-        mark_node_locs g (ws'', set'')
+  let rec mark_node_locs g (loc, set) =
+    let set' = NodeLocSet.add loc set in
+    match Graph.find_node loc g with
+    | None -> set'
+    | Some x ->
+        if NodeLocSet.cardinal x.Node.succ = 1
+        then let l = NodeLocSet.choose x.Node.succ in
+             if NodeLoc.compare loc l >= 0
+             then set'
+             else mark_node_locs g (l, set')
+        else
+        let f l x =
+          if NodeLoc.compare loc l >= 0
+          then x
+          else let s' = mark_node_locs g (l, NodeLocSet.empty) in
+               match x with
+               | None -> Some s'
+               | Some s -> Some (NodeLocSet.inter s s') in
+        let r = match NodeLocSet.fold f x.Node.succ None with
+          | None -> NodeLocSet.empty
+          | Some s -> s in
+        NodeLocSet.union set' r
 
-  let find_common_succs g a b =
-    let _, a_set = mark_node_locs g (NodeLocSet.singleton a, NodeLocSet.empty) in
-    let _, b_set = mark_node_locs g (NodeLocSet.singleton b, NodeLocSet.empty) in
+  and find_common_succs g a b =
+    let a_set = mark_node_locs g (a, NodeLocSet.empty) in
+    let b_set = mark_node_locs g (b, NodeLocSet.empty) in
     NodeLocSet.inter a_set b_set
 
 end

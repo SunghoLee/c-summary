@@ -500,13 +500,7 @@ module LocalState = struct
              | Some if_s ->
                  let if_s' = stmts2_flatten if_s in
                  let else_s' = stmts2_flatten sts in
-                 let if_b = match if_s' with
-                   | [] -> Y.Empty
-                   | _ -> Y.Block if_s' in
-                 let packed = match else_s' with
-                   | [] -> Y.If (cond, if_b, None)
-                   | _ -> Y.If (cond, if_b, Some (Y.Block else_s')) in
-                 push_stmt packed { s with blocks = parent })
+                 { s with blocks = parent } |> push_stmt (Y.If (cond, Y.Block if_s', Some (Y.Block else_s'))))
     | BWhile (parent, cond), sts ->
         let stmts' = stmts2_flatten sts in
         let packed = Y.While (cond, Y.Block stmts') in
@@ -917,12 +911,12 @@ module SimpleModel : GeneratorModel = struct
       | PITop (l, v) :: ss -> (LS.pop_block ls, PITopNot (l, vis) :: ss, vis)
       | _ -> (ls, stk, vis) in
     if CFGNLSet.mem node.CFGN.loc visited
-    then let ls, stk, vis = pop (ls, stk, visited) in ([], ls, stk, vis)
-    else
-      match stk with
+    then(
+      let ls, stk, vis = pop (ls, stk, visited) in ([], ls, stk, vis))
+    else match stk with
       | PIIf (l, v, cs) :: ss when CFGNLSet.mem node.CFGN.loc cs ->
-          [], LS.pop_block ls, PIIfNot (l, v, cs) :: ss, visited
-      | PIIfNot (_, _, cs) :: ss when CFGNLSet.mem node.CFGN.loc cs ->
+          [], LS.pop_block ls, PIIfNot (l, v, cs) :: ss, v
+      | PIIfNot (l, _, cs) :: ss when CFGNLSet.mem node.CFGN.loc cs ->
           [node], LS.pop_block ls, ss, visited
       | _ ->
         let v' = CFGNLSet.add node.CFGN.loc visited in
