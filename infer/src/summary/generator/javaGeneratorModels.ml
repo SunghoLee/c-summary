@@ -889,24 +889,19 @@ module SimpleModel : GeneratorModel = struct
       | CFGN.KPruneF v -> exp_to_Yexpr ls v
       | _ -> None
 
-  type prune_info = PIIf of CFGNLoc.t * CFGNLSet.t * CFGNLSet.t
-                  | PIIfNot of CFGNLoc.t * CFGNLSet.t * CFGNLSet.t
+  type prune_info = PIIf of CFGNLoc.t * CFGNLSet.t * CFGNLoc.t option
+                  | PIIfNot of CFGNLoc.t * CFGNLSet.t * CFGNLoc.t option
                   | PITop of CFGNLoc.t * CFGNLSet.t
                   | PITopNot of CFGNLoc.t * CFGNLSet.t
   type track_state = LS.t * prune_info list
-
-  let is_end_of_track node stk visited =
-    if CFGNLSet.mem node.CFGN.loc visited
-    then true
-    else match stk with
-      | PIIf (_, _, cs) :: _ -> CFGNLSet.mem node.CFGN.loc cs
-      | PIIfNot (_, _, cs) :: _ -> CFGNLSet.mem node.CFGN.loc cs
-      | _ -> false
+    
 
   let analyze_node node (LS.{cfg} as ls, stk, visited) =
     let rec pop (ls, stk, vis) = match stk with
-      | PIIfNot (_, _, _) :: ss -> pop (LS.pop_block ls, ss, vis)
-      | PIIf (l, v, cs) :: ss -> (LS.pop_block ls, PIIfNot (l, v, cs) :: ss, v)
+      | PIIfNot (_, _, _) :: ss ->
+          pop (LS.pop_block ls, ss, vis)
+      | PIIf (l, v, cs) :: ss ->
+          (LS.pop_block ls, PIIfNot (l, v, cs) :: ss, v)
       | PITopNot (l, v) :: ss -> pop (ls, ss, vis)
       | PITop (l, v) :: ss -> (LS.pop_block ls, PITopNot (l, vis) :: ss, vis)
       | _ -> (ls, stk, vis) in
@@ -914,14 +909,15 @@ module SimpleModel : GeneratorModel = struct
     then(
       let ls, stk, vis = pop (ls, stk, visited) in ([], ls, stk, vis))
     else match stk with
-      | PIIf (l, v, cs) :: ss when CFGNLSet.mem node.CFGN.loc cs ->
-          [], LS.pop_block ls, PIIfNot (l, v, cs) :: ss, v
-      | PIIfNot (l, _, cs) :: ss when CFGNLSet.mem node.CFGN.loc cs ->
+      | PIIf (l, v, Some cs) :: ss when CFGNLoc.compare node.CFGN.loc cs >= 0 ->
+          [], LS.pop_block ls, PIIfNot (l, v, Some cs) :: ss, v
+      | PIIfNot (l, _, Some cs) :: ss when CFGNLoc.compare node.CFGN.loc cs >= 0 ->
           [node], LS.pop_block ls, ss, visited
       | _ ->
         let v' = CFGNLSet.add node.CFGN.loc visited in
         let succs = CFGN.get_succ_list node |> CFGH.sort_locs_by_idx in
         let succs = CFGH.loc_list_to_node_list succs cfg in
+        let succs' = succs |> List.filter (fun x -> CFGN.compare node x < 0) in
         match succs with
         | [] ->
             let ls, stk, v'' = pop (ls, stk, v') in
@@ -932,12 +928,15 @@ module SimpleModel : GeneratorModel = struct
                   [y; x], LS.push_reserved ls,
                   PITop (node.CFGN.loc, v') :: stk, v'
               | Some e ->
-                  let cs = CFGH.find_common_succs cfg (x.CFGN.loc) (y.CFGN.loc) in
+                  let cs = match node.CFGN.cs with
+                    | None -> None
+                    | Some x -> x in
+                  (*let cs = CFGNLSet.empty CFGH.find_common_succs cfg (x.CFGN.loc) (y.CFGN.loc)) in*)
                   succs,
                   LS.push_block LS.KIf e ls,
                   PIIf (node.CFGN.loc, v', cs) :: stk,
                   v')
-        | _ -> succs, ls, stk, v'
+        | _ -> succs', ls, stk, v'
 
   let track_possible_paths_of_cfg loc_callback (LS.{cfg} as ls) =
     match CFGG.find_initial cfg with
@@ -966,6 +965,9 @@ module SimpleModel : GeneratorModel = struct
 
   (* API *)
   let method_body options gs glocs proc heap logs graph =
+    Printf.printf "START: Update common successors\n%!";
+    CFGH.update_common_successors graph;
+    Printf.printf "DONE:  Update common successors\n%!";
     let stk = init_stack glocs proc in
     let ls = LS.mk_empty glocs heap graph proc stk in
     let ls =

@@ -121,25 +121,29 @@ module Node = struct
     { kind: node_kind;
       loc: NodeLoc.t;
       mutable succ: NodeLocSet.t;
-      mutable pred: NodeLocSet.t }
+      mutable pred: NodeLocSet.t;
+      mutable cs: NodeLoc.t option option (* (lazy) Common Successor *)  }
 
   (* Constructors *)
   let dummy loc =
     { kind = KCommon;
       loc;
       succ = NodeLocSet.empty;
-      pred = NodeLocSet.empty }
+      pred = NodeLocSet.empty;
+      cs = None }
 
   let mk kind loc succ_list pred_list =
     { kind;
       loc;
       succ = NodeLocSet.of_list succ_list;
-      pred = NodeLocSet.of_list pred_list }
+      pred = NodeLocSet.of_list pred_list;
+      cs = None }
 
   let mk_on kind loc succ pred base_loc =
     { kind; loc = base_loc @ loc;
       succ = NodeLocSet.map (fun x -> base_loc @ x) succ;
-      pred = NodeLocSet.map (fun x -> base_loc @ x) pred }
+      pred = NodeLocSet.map (fun x -> base_loc @ x) pred;
+      cs = None }
 
   (* Getters *)
   let get_kind { kind } = kind
@@ -348,7 +352,13 @@ module Graph = struct
             export_dot_loc succ;
         if NodeLoc.compare_by_idx node.Node.loc succ < 0
         then F.fprintf fmt ";"
-        else F.fprintf fmt " [style=dashed];")
+        else F.fprintf fmt " [style=dashed];");
+    match node.Node.cs with
+    | Some (Some cs) ->
+        F.fprintf fmt "%a -> %a [color=red];"
+            export_dot_loc node.Node.loc
+            export_dot_loc cs
+    | _ -> ()
           
   let rec export_dot_nodes fmt nodes =
     nodes |> NodeSet.iter (export_dot_node fmt)
@@ -425,6 +435,95 @@ module GraphHelper = struct
           | _ -> None
 
 
+  let rec find_cs g a b =
+    (* Check cs was already calculated *)
+    let cmp = NodeLoc.compare a b in
+    if cmp = 0
+    then Some a
+    else let f, s = if cmp < 0 then a, b else b, a in
+         match Graph.find_node f g with
+         | None -> None
+         | Some x -> match x.Node.cs with
+           | None ->
+               update_common_succ g f;
+               find_cs g f s
+           | Some (Some y) when NodeLoc.compare f y < 0 ->
+               find_cs g y s
+           | Some (Some y) -> Some s
+           | Some None -> Some s
+
+  and mark_locs g (loc, set) =
+    let set' = NodeLocSet.add loc set in
+    match Graph.find_node loc g with
+    | None -> set'
+    | Some x -> match x.Node.cs with
+      | None -> update_common_succ g loc; mark_locs g (loc, set')
+      | Some (Some y) when NodeLoc.compare loc y < 0 -> mark_locs g (y, set')
+      | _ -> set'
+            
+  and update_common_succ g loc =
+    (*F.printf "ucs %a\n%!" NodeLoc.pp loc;*)
+    (* Check cs was already calculated *)
+    match Graph.find_node loc g with
+    | None ->
+        (*F.printf "  No Node!\n%!";*)
+        ()
+    | Some x when x.Node.kind = KCallBegin ->
+      ( match x.Node.cs with
+      | Some _ ->
+        (*F.printf "  Already Calculated!\n%!";*)
+          ()
+      | None ->
+        (*F.printf "  Calculate as CalLBegin!\n%!";*)
+          NodeLocSet.iter (update_common_succ g) x.Node.succ;
+          (match Graph.find_node_by_id (NodeLoc.inc_idx loc) g with
+          | None ->
+              x.Node.cs <- Some None; ()
+          | Some y ->
+              x.Node.cs <- Some (Some y.Node.loc);
+              update_common_succ g y.Node.loc) )
+    | Some x ->
+      (*F.printf "  node %a\n%!" Node.pp x;*)
+      match x.Node.cs with
+      | Some _ ->
+        (*F.printf "  Already Calculated!\n%!";*)
+          () (* DONE *)
+      | None -> (* was not calculated because of lazyness *)
+        (*F.printf "  Calculate as Common!\n%!";*)
+        match Node.get_succ_list x with
+        | [] ->
+          (*F.printf "  No Succs!\n%!";*)
+            x.Node.cs <- Some None; ()
+        | [s] -> (*F.printf "  1 Succs!\n%!";*)
+                 x.Node.cs <- Some (Some s); (* Simple update *)
+                 update_common_succ g s
+        | y :: ys ->
+          (*F.printf "  >=2 Succs!\n%!";*)
+            NodeLocSet.iter (update_common_succ g) (x.Node.succ);
+            let rec f l rs = match rs with
+              | [] -> Some l
+              | z :: zs -> match find_cs g l z with
+                | None -> None
+                | Some t -> f t zs in
+            x.Node.cs <- Some (f y ys); ()
+              (*
+          let f l x =
+            if NodeLoc.compare loc l >= 0
+            then x
+            else let s = mark_locs g (l, NodeLocSet.empty) in
+                 match x with
+                 | None -> Some s
+                 | Some s' -> Some (NodeLocSet.inter s s') in
+          let cs = match NodeLocSet.fold f x.Node.succ None with
+            | None -> None
+            | Some s -> NodeLocSet.min_elt_opt s in
+          x.Node.cs <- Some cs;
+          ()*)
+
+  let update_common_successors g =
+    match Graph.find_initial g with
+    | None -> ()
+    | Some x -> update_common_succ g x.Node.loc
 
 
   let rec mark_node_locs g (loc, set) =
@@ -437,20 +536,19 @@ module GraphHelper = struct
              if NodeLoc.compare loc l >= 0
              then set'
              else mark_node_locs g (l, set')
-        else
-        let f l x =
-          if NodeLoc.compare loc l >= 0
-          then x
-          else let s' = mark_node_locs g (l, NodeLocSet.empty) in
-               match x with
-               | None -> Some s'
-               | Some s -> Some (NodeLocSet.inter s s') in
-        let r = match NodeLocSet.fold f x.Node.succ None with
-          | None -> NodeLocSet.empty
-          | Some s -> s in
-        NodeLocSet.union set' r
+        else let f l x =
+               if NodeLoc.compare loc l >= 0
+               then x
+               else let s' = mark_node_locs g (l, NodeLocSet.empty) in
+                    match x with
+                    | None -> Some s'
+                    | Some s -> Some (NodeLocSet.inter s s') in
+             let r = match NodeLocSet.fold f x.Node.succ None with
+               | None -> NodeLocSet.empty
+               | Some s -> s in
+             NodeLocSet.union set' r
 
-  and find_common_succs g a b =
+  and find_common_succs g a b = 
     let a_set = mark_node_locs g (a, NodeLocSet.empty) in
     let b_set = mark_node_locs g (b, NodeLocSet.empty) in
     NodeLocSet.inter a_set b_set
