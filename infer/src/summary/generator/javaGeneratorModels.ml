@@ -965,9 +965,7 @@ module SimpleModel : GeneratorModel = struct
 
   (* API *)
   let method_body options gs glocs proc heap logs graph =
-    Printf.printf "START: Update common successors\n%!";
     CFGH.update_common_successors graph;
-    Printf.printf "DONE:  Update common successors\n%!";
     let stk = init_stack glocs proc in
     let ls = LS.mk_empty glocs heap graph proc stk in
     let ls =

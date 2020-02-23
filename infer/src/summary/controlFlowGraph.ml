@@ -449,8 +449,7 @@ module GraphHelper = struct
                find_cs g f s
            | Some (Some y) when NodeLoc.compare f y < 0 ->
                find_cs g y s
-           | Some (Some y) -> Some s
-           | Some None -> Some s
+           | _ -> None
 
   and mark_locs g (loc, set) =
     let set' = NodeLocSet.add loc set in
@@ -462,19 +461,13 @@ module GraphHelper = struct
       | _ -> set'
             
   and update_common_succ g loc =
-    (*F.printf "ucs %a\n%!" NodeLoc.pp loc;*)
     (* Check cs was already calculated *)
     match Graph.find_node loc g with
-    | None ->
-        (*F.printf "  No Node!\n%!";*)
-        ()
+    | None -> ()
     | Some x when x.Node.kind = KCallBegin ->
       ( match x.Node.cs with
-      | Some _ ->
-        (*F.printf "  Already Calculated!\n%!";*)
-          ()
+      | Some _ -> ()
       | None ->
-        (*F.printf "  Calculate as CalLBegin!\n%!";*)
           NodeLocSet.iter (update_common_succ g) x.Node.succ;
           (match Graph.find_node_by_id (NodeLoc.inc_idx loc) g with
           | None ->
@@ -483,22 +476,15 @@ module GraphHelper = struct
               x.Node.cs <- Some (Some y.Node.loc);
               update_common_succ g y.Node.loc) )
     | Some x ->
-      (*F.printf "  node %a\n%!" Node.pp x;*)
       match x.Node.cs with
-      | Some _ ->
-        (*F.printf "  Already Calculated!\n%!";*)
-          () (* DONE *)
+      | Some _ -> () (* DONE *)
       | None -> (* was not calculated because of lazyness *)
-        (*F.printf "  Calculate as Common!\n%!";*)
         match Node.get_succ_list x with
         | [] ->
-          (*F.printf "  No Succs!\n%!";*)
             x.Node.cs <- Some None; ()
-        | [s] -> (*F.printf "  1 Succs!\n%!";*)
-                 x.Node.cs <- Some (Some s); (* Simple update *)
+        | [s] -> x.Node.cs <- Some (Some s); (* Simple update *)
                  update_common_succ g s
         | y :: ys ->
-          (*F.printf "  >=2 Succs!\n%!";*)
             NodeLocSet.iter (update_common_succ g) (x.Node.succ);
             let rec f l rs = match rs with
               | [] -> Some l
@@ -506,51 +492,10 @@ module GraphHelper = struct
                 | None -> None
                 | Some t -> f t zs in
             x.Node.cs <- Some (f y ys); ()
-              (*
-          let f l x =
-            if NodeLoc.compare loc l >= 0
-            then x
-            else let s = mark_locs g (l, NodeLocSet.empty) in
-                 match x with
-                 | None -> Some s
-                 | Some s' -> Some (NodeLocSet.inter s s') in
-          let cs = match NodeLocSet.fold f x.Node.succ None with
-            | None -> None
-            | Some s -> NodeLocSet.min_elt_opt s in
-          x.Node.cs <- Some cs;
-          ()*)
 
   let update_common_successors g =
     match Graph.find_initial g with
     | None -> ()
     | Some x -> update_common_succ g x.Node.loc
-
-
-  let rec mark_node_locs g (loc, set) =
-    let set' = NodeLocSet.add loc set in
-    match Graph.find_node loc g with
-    | None -> set'
-    | Some x ->
-        if NodeLocSet.cardinal x.Node.succ = 1
-        then let l = NodeLocSet.choose x.Node.succ in
-             if NodeLoc.compare loc l >= 0
-             then set'
-             else mark_node_locs g (l, set')
-        else let f l x =
-               if NodeLoc.compare loc l >= 0
-               then x
-               else let s' = mark_node_locs g (l, NodeLocSet.empty) in
-                    match x with
-                    | None -> Some s'
-                    | Some s -> Some (NodeLocSet.inter s s') in
-             let r = match NodeLocSet.fold f x.Node.succ None with
-               | None -> NodeLocSet.empty
-               | Some s -> s in
-             NodeLocSet.union set' r
-
-  and find_common_succs g a b = 
-    let a_set = mark_node_locs g (a, NodeLocSet.empty) in
-    let b_set = mark_node_locs g (b, NodeLocSet.empty) in
-    NodeLocSet.inter a_set b_set
 
 end
