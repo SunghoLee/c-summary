@@ -244,6 +244,7 @@ module TransferFunctions = struct
       let scope = VVar.mk_scope proc_name in
       (* vvv  Append node into graph  vvv *)
       let cfg_node =
+        (* Parse Infer's expression into our CFG's expression *)
         let zero = IntLit.of_int 0 in
         let rec try_parse_exp = function
           | Exp.Var ident ->
@@ -270,6 +271,7 @@ module TransferFunctions = struct
               (*let () = L.progress "  -- Exp.PVar %a\n@." Pvar.pp_value pvar in*)
               ControlFlowGraph.Exp.Unknown
           | _ -> ControlFlowGraph.Exp.Unknown in
+        (* Destruct Infer's node *)
         let node = match node with (n, i) -> n in
         let kind = match instr with
           | Prune (exp, _, true, _) ->
@@ -279,16 +281,25 @@ module TransferFunctions = struct
           | ExitScope _ -> ControlFlowGraph.Node.KEnd
           | Call _ -> ControlFlowGraph.Node.KCall
           | _ -> ControlFlowGraph.Node.KCommon in
-        let id = Procdesc.Node.get_id node in
-        let idx = ControlFlowGraph.Graph.alloc_idx graph in
+        let id = ((Procdesc.Node.get_id node) :> int) in
+        let n_instrs = Instrs.count (Procdesc.Node.get_instrs node) in
+
+        (* Try to get the index for a new node *)
+        let exists, idx = ControlFlowGraph.Graph.alloc_idx id n_instrs graph in
         let loc = ControlFlowGraph.NodeLoc.mk [proc_name, id, idx] in
-        let mk_loc_list = List.fold ~init: [] ~f: (fun l n ->
-            let loc = ControlFlowGraph.NodeLoc.mk
-                [proc_name, Procdesc.Node.get_id n, -1] in
-            loc :: l ) in
-        let succ_list = Procdesc.Node.get_succs node |> mk_loc_list in
-        let pred_list = Procdesc.Node.get_preds node |> mk_loc_list in
-        ControlFlowGraph.Graph.add_node kind loc succ_list pred_list graph
+        if exists (* If a node with same index is already in the CFG, *)
+        then (* then just find the node *)
+          match ControlFlowGraph.Graph.find_node loc graph with
+          | None -> failwith "Cannot find node" (* This must be an impossible case *)
+          | Some x -> x
+        else (* otherwise try to make a new node and add it to CFG *)
+          let mk_loc_list = List.fold ~init: [] ~f: (fun l n ->
+              let loc = ControlFlowGraph.NodeLoc.mk
+                  [proc_name, (Procdesc.Node.get_id n :> int), -1] in
+              loc :: l ) in
+          let succ_list = Procdesc.Node.get_succs node |> mk_loc_list in
+          let pred_list = Procdesc.Node.get_preds node |> mk_loc_list in
+          ControlFlowGraph.Graph.add_node kind loc succ_list pred_list graph
       in
       (* ^^^  ----------------------  ^^^ *)
       match instr with
@@ -496,13 +507,9 @@ module TransferFunctions = struct
                         | None ->
                             heap''' ))
                   in
-                  if not (CallLogs.is_empty end_logs)
-                  (*if ControlFlowGraph.Graph.has_jni end_graph*)
+                  if not (CallLogs.is_empty end_logs) (* Merge when the proc has JNI API Call *)
                   then (ControlFlowGraph.Graph.merge graph cfg_node end_graph;
                         ControlFlowGraph.Graph.mark_jni graph);
-          (*L.progress "%a\n@."
-            (ControlFlowGraph.Graph.export_dot "MergedGraph")
-            graph;*)
                   mk_domain heap'''' logs' graph
                 | None -> 
                     (*let () = L.progress "Not existing callee. Just ignore this call.\n@." in*)

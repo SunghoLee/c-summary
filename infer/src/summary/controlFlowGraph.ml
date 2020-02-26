@@ -5,35 +5,49 @@ module L = Logging
 
 (* Node Location Informations *)
 module NodeLoc = struct
-  (* id_t: id of node given by Infer *)
-  type id_t = Procdesc.Node.id
-
   type elt =
     { fn: string; (* function name *)
-      id: id_t; (* id from Infer *)
+      id: int; (* id from Infer *)
       sub_id: int; (* sub_id to distinguish splitted nodes *)
       idx: int (* index (order of abstract interpretation) *) }
+  (* sub_id exists for splitting a Call node into two nodes:
+   * CallBegin and CallEnd. In the case, CallBegin.id = 0
+   * and CallEnd.id = 1. Because of similar reason, idx increases
+   * by 2 when idx allocation, only CallEnd.idx is odd
+   * and all other idx are even, and CallEnd.idx = CallBegin.idx + 1. *)
 
+  (* NodeLoc is a non-empty list of locations of nodes.
+   * The 1st elem is a caller of the 2nd one,
+   * the 2nd is a caller of the 3rd, ...
+   * The last elem is ORIGINAL location of the node. *)
   type t = elt list
 
-  (* Constructor *)
-  let rec mk: (string * id_t * int) list -> t =
+  (* Constructor
+   * Take list of (fun name, node id, allocated idx) *)
+  let rec mk: (string * int * int) list -> t =
     function [] -> []
            | (fn, id, idx) :: xs -> {fn; id; sub_id = 0; idx} :: mk xs
 
   (* Modifiers *)
-  (* increment given location's index & sub_id *)
+  (* increment given location's index & sub_id.
+   * Arg is CallBegin's loc, and the return is CallEnd's loc *)
   let inc_idx: t -> t =
     function [] -> []
            | {fn; id; sub_id; idx} :: xs ->
                {fn; id; sub_id = sub_id + 1; idx = idx + 1} :: xs
                
+  (* decrease given location's index & sub_id.
+   * If the given arg is CallEnd's loc, it'll return CallBegin's loc
+   * Otherwise, it'll return the given arg *)
   let base_idx: t -> t =
     function [] -> []
            | {fn; id; sub_id; idx} :: xs ->
                {fn; id; sub_id = 0; idx = idx - sub_id} :: xs
 
-  (* Comparison *)
+  (* Comparisons
+   * compare: full comparison; order: fn -> idx -> id -> sub_id
+   * compare_by_idx: compare idx only; order: idx
+   * compare_by_id: compare by fn and id; order: fn -> id *)
   let rec mk_list_cmp cmp = function
     | [] -> (function [] -> 0
                     | _ :: _ -> -1)
@@ -47,13 +61,12 @@ module NodeLoc = struct
   let compare_by_idx  = mk_list_cmp compare_elt_by_idx
 
   let compare_elt_by_id
-      { fn = fn1; id = id1; sub_id = sub1 }
-      { fn = fn2; id = id2; sub_id = sub2 } =
+      { fn = fn1; id = id1 }
+      { fn = fn2; id = id2 } =
     let c1 = compare fn1 fn2 in
     let c2 = compare id1 id2 in
     if c1 <> 0 then c1
-    else if c2 <> 0 then c2
-    else compare sub1 sub2
+    else compare id1 id2
 
   let compare_by_id = mk_list_cmp compare_elt_by_id
       
@@ -75,7 +88,7 @@ module NodeLoc = struct
     | n when n > 0 -> F.fprintf fmt "'"; pp_qt fmt (n - 1)
     | _ -> ()
   let pp_elt fmt {fn; id; sub_id; idx} =
-    F.fprintf fmt "%s:%a%a(%d)" fn Procdesc.Node.pp_id id pp_qt sub_id idx
+    F.fprintf fmt "%s:%d%a(%d)" fn id pp_qt sub_id idx
 
   let pp fmt =
     let rec f s = function
@@ -90,11 +103,13 @@ end
 (* Set of NodeLoc *)
 module NodeLocSet = PrettyPrintable.MakePPSet(NodeLoc)
 
+(* Expression to denote condition of prune *)
 module Exp = struct
-  type t = Unknown
-         | IsTrue of string
-         | IsFalse of string
+  type t = Unknown (* Unknown/inexpressible exp *)
+         | IsTrue of string (* true if the var contains non-zero(true) *)
+         | IsFalse of string (* true if the var contains zero(false) *)
 
+  (* negate the given expression *)
   let neg = function
     | IsTrue loc -> IsFalse loc
     | IsFalse loc -> IsTrue loc
@@ -122,7 +137,10 @@ module Node = struct
       loc: NodeLoc.t;
       mutable succ: NodeLocSet.t;
       mutable pred: NodeLocSet.t;
-      mutable cs: NodeLoc.t option option (* (lazy) Common Successor *)  }
+      (* (lazily calculated) common successor
+       * - None: Not calculated yet
+       * - Some x: Already calculated and the result is x *)
+      mutable cs: NodeLoc.t option option }
 
   (* Constructors *)
   let dummy loc =
@@ -139,6 +157,7 @@ module Node = struct
       pred = NodeLocSet.of_list pred_list;
       cs = None }
 
+  (* Make a callee's node which is called at base_loc *)
   let mk_on kind loc succ pred base_loc =
     { kind; loc = base_loc @ loc;
       succ = NodeLocSet.map (fun x -> base_loc @ x) succ;
@@ -190,20 +209,55 @@ end
 module NodeSet = PrettyPrintable.MakePPSet(Node)
 
 module Graph = struct
+  type idx_pool_elem =
+    { cardinal: int; (* # of instrs of the node *)
+      base_idx: int; (* the smallest idx for the node *)
+      mutable counter: int; (* index of given instr *)
+      mutable is_done: bool (* whether allocation is done *) }
+  type idx_pool = idx_pool_elem option Array.t
+
   type t =
     { mutable nodes: NodeSet.t; (* nodes *)
       mutable idx: int; (* index counter *)
+      mutable pool: idx_pool;
       mutable containing_jni_call: bool }
 
+  (* Construct *)
   let mk_empty () =
     { nodes = NodeSet.empty;
       idx = 0;
+      pool = Array.create 0 None;
       containing_jni_call = false }
 
   (* Index Allocator *)
-  let set_idx i g = g.idx <- i; i
-  let get_idx g = g.idx
-  let alloc_idx g = let i = g.idx in g.idx <- g.idx + 2; i
+  let extend_pool len g =
+    let m = len - Array.length g.pool in
+    g.pool <- Array.append g.pool (Array.create m None)
+
+  let alloc_idx' e =
+    let idx = e.base_idx + 2 * e.counter in
+    if (e.counter + 1) >= e.cardinal
+    then ( e.counter <- 0;
+           e.is_done <- true )
+    else ( e.counter <- e.counter + 1 );
+    idx
+
+  let alloc_idx id n_instrs g =
+    let cardinal = if n_instrs < 1 then 1 else n_instrs in
+    if id >= Array.length g.pool
+    then extend_pool (id + 1) g;
+    match Array.get g.pool id with
+    | None ->
+        let e = { cardinal;
+                  base_idx = g.idx;
+                  counter = 0;
+                  is_done = false } in
+        Array.set g.pool id (Some e);
+        g.idx <- g.idx + (2 * cardinal);
+        (false, alloc_idx' e)
+    | Some e ->
+        let is_done = e.is_done in
+        (is_done, alloc_idx' e)
 
   (* has_jni flag *)
   let has_jni g = g.containing_jni_call
@@ -227,46 +281,40 @@ module Graph = struct
   (* find_node: find node using the given location *)
   let find_node loc g = NodeSet.find_opt (Node.dummy loc) g.nodes
 
+  (* get_a_succ: choose arbitrary successor NODE of the given node *)
   let get_a_succ node g =
-    match NodeLocSet.elements node.Node.succ with
-    | [l] -> find_node l g
-    | _ -> None
+    match NodeLocSet.choose_opt node.Node.succ with
+    | Some l -> find_node l g
+    | None -> None
 
   (* Graph modifiers *)
   let add_node kind loc succ_list pred_list g =
-    let base_loc = NodeLoc.base_idx loc in
-    let inc_loc = NodeLoc.inc_idx base_loc in
-    let try_add l =
-      match find_node_by_id_last l g with
-      | None -> None
-      | Some node ->
-          let new_node = Node.mk kind loc succ_list [node.Node.loc] in
-          node.succ <- NodeLocSet.singleton loc;
-          g.nodes <- NodeSet.add new_node g.nodes;
-          Some new_node
-    in
-    match try_add inc_loc with
-    | Some n -> n
-    | None ->  match try_add base_loc with
-      | Some n -> n
-      | None ->
-          let node = Node.mk kind loc succ_list pred_list in
-          g.nodes <- NodeSet.add node g.nodes;
-          node
+    match find_node_by_id_last loc g with
+    | Some node ->
+        let new_node = Node.mk kind loc succ_list [node.Node.loc] in
+        node.succ <- NodeLocSet.singleton loc;
+        g.nodes <- NodeSet.add new_node g.nodes;
+        new_node
+    | None ->
+        let node = Node.mk kind loc succ_list pred_list in
+        g.nodes <- NodeSet.add node g.nodes;
+        node
 
   let remove_node loc g =
     g.nodes <- NodeSet.remove (Node.dummy loc) g.nodes
 
+  (* Update link
+   * After call add_node, some nodes pointing dummy node location (idx = -1)
+   * as succs/preds. update_link_locs will change this dummy location
+   * into node location. (Loc in succs -> the first node with the given id,
+   * Loc in preds -> the last node with the given id) *)
   let update_link_loc find g set =
     set |> NodeLocSet.map (fun l ->
       match find_node l g with
-        | Some _ ->
-            l
+        | Some _ -> l
         | None -> match find l g with
-            | None ->
-                l
-            | Some x ->
-                x.Node.loc )
+            | None -> l
+            | Some x -> x.Node.loc )
 
   let update_link_locs g =
     g.nodes |> NodeSet.iter (fun n ->
@@ -285,7 +333,7 @@ module Graph = struct
           g.nodes <- NodeSet.add new_n g.nodes)
 
   let merge g tgt src_g =
-    if NodeSet.is_empty g.nodes
+    if NodeSet.is_empty g.nodes || tgt.Node.kind <> Node.KCall
     then ()
     else
       let init = find_initial src_g in
@@ -469,7 +517,7 @@ module GraphHelper = struct
       | Some _ -> ()
       | None ->
           NodeLocSet.iter (update_common_succ g) x.Node.succ;
-          (match Graph.find_node_by_id (NodeLoc.inc_idx loc) g with
+          (match Graph.find_node (NodeLoc.inc_idx loc) g with
           | None ->
               x.Node.cs <- Some None; ()
           | Some y ->
@@ -497,5 +545,4 @@ module GraphHelper = struct
     match Graph.find_initial g with
     | None -> ()
     | Some x -> update_common_succ g x.Node.loc
-
 end
