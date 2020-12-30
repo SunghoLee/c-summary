@@ -1,7 +1,7 @@
 # C Semantic Summary Extractor for JNI program analysis 
 
 The C Semantic Summary Extractor is a tool that extracts behavioral summaries from C/C++ source code, which is a part of JNI program analysis. Most of things in this repo is cloned from the Infer static analyzer repository, since the tool is built on top of Infer.
-Summaries extracted by the tool consists of JNI function call information that is a pair of JNI functions it calls and abstract argument values at the call sites. For more detail, please read the paper presented in ASE'20.
+Summaries extracted by the tool consists of JNI function call information that is a pair of JNI functions it calls and abstract argument values at the call sites. For more detail, please read the paper "Broadening Horizons of Multilingual Static Analysis: Semantic Summary Extraction from C Code for JNI Program Analysis" that is presented in ASE'20.
 
 ## Installation
 
