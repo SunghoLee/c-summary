@@ -24,7 +24,7 @@ Install the following libraries using ```opam install [library]```
 ### Installation steps
 After installing the additional prerequisites, the remainig installation steps are completely same with the Infer static analyzer. See "Install Infer from source" in [INSTALL.md](https://github.com/facebook/infer/blob/master/INSTALL.md) to build Infer and this tool.
 
-# Run C Semantic Summary Extractor
+## Run C Semantic Summary Extractor
 Before extracting semantic summaries from C/C++ code, the capturing phase of Infer must be done. Please see [this material](https://fbinfer.com/docs/infer-workflow) to perform the capturing phase.
 
 After then, we need five steps to extract semantic summaries and one more step to transform the summaries to Java methods. At first, the following five commands are used to extract semantic summaries from the captured C/C++ code:
