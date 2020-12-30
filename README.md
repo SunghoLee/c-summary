@@ -4,7 +4,7 @@ The C Semantic Summary Extractor is a tool that extracts semantic summaries rela
 
 Summaries extracted by the tool consists of JNI function call information including target JNI functions and abstract argument values at the call sites. The extracted summaries are translated to Java methods by JavaGenerator. By replacing C/C++ code in JNI programs with the generated Java methods, Java static analyzer can analyze the JNI programs. 
 
-For more detail, please read the paper "Broadening Horizons of Multilingual Static Analysis: Semantic Summary Extraction from C Code for JNI Program Analysis" that is presented in ASE'20.
+For more detail, please read the paper ["Broadening Horizons of Multilingual Static Analysis: Semantic Summary Extraction from C Code for JNI Program Analysis"](https://ieeexplore.ieee.org/abstract/document/9286029) that is presented in ASE'20.
 
 ## Installation
 
