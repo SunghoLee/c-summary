@@ -22,7 +22,7 @@ Install the following libraries using ```opam install [library]```
 - z3
 
 ### Installation steps
-After installing the additional prerequisites, the remainig installation steps are completely same with the Infer static analyzer. See "Install Infer from source" in [INSTALL.md](https://github.com/facebook/infer/blob/master/INSTALL.md) to build Infer and this tool.
+After installing the additional prerequisites, the remainig installation steps are completely same with the Infer static analyzer. See "Install Infer from source" in [INSTALL.md](https://github.com/facebook/infer/blob/master/INSTALL.md) to build Infer and this tool. When the installation is done, execute a script ``make_summ.sh`` to build C Semantic Summary Extractor and other subsidiary tools.
 
 ## Run C Semantic Summary Extractor
 Before extracting semantic summaries from C/C++ code, the capturing phase of Infer must be done. Please see [this material](https://fbinfer.com/docs/infer-workflow) to perform the capturing phase.
