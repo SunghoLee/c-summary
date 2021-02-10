@@ -1,0 +1,45 @@
+<__Model.__JNI: __Model.__Class FindClass(java.lang.String)>
+<__Model.__JNI: __Model.__Class GetObjectClass(java.lang.Object)>
+
+
+<__Model.__JNI: __Model.__MethodID GetMethodID(__Model.__Class,java.lang.String,java.lang.String)>
+<__Model.__JNI: __Model.__MethodID GetStaticMethodID(__Model.__Class,java.lang.String,java.lang.String)>
+<__Model.__JNI: __Model.__FieldID GetFieldID(__Model.__Class,java.lang.String,java.lang.String)>
+<__Model.__JNI: __Model.__FieldID GetStaticFieldID(__Model.__Class,java.lang.String,java.lang.String)>
+
+
+<__Model.__JNI: void CallVoidMethod(java.lang.Object,__Model.__MethodID,java.lang.Object...)>
+<__Model.__JNI: java.lang.Object CallObjectMethod(java.lang.Object,__Model.__MethodID,java.lang.Object...)>
+<__Model.__JNI: @prim Call@PrimMethod(java.lang.Object,__Model.__MethodID,java.lang.Object...)>
+
+<__Model.__JNI: void CallStaticVoidMethod(__Model.__Class,__Model.__MethodID,java.lang.Object...)>
+<__Model.__JNI: java.lang.Object CallStaticObjectMethod(__Model.__Class,__Model.__MethodID,java.lang.Object...)>
+<__Model.__JNI: @prim CallStatic@PrimMethod(__Model.__Class,__Model.__MethodID,java.lang.Object...)>
+
+
+<__Model.__JNI: java.lang.Object GetObjectField(java.lang.Object,__Model.__FieldID)>
+<__Model.__JNI: @prim Get@PrimField(java.lang.Object,__Model.__FieldID)>
+
+<__Model.__JNI: java.lang.Object GetStaticObjectField(__Model.__Class,__Model.__FieldID)>
+<__Model.__JNI: @prim GetStatic@PrimField(__Model.__Class,__Model.__FieldID)>
+
+
+<__Model.__JNI: void SetObjectField(java.lang.Object,__Model.__FieldID,java.lang.Object)>
+<__Model.__JNI: void Set@PrimField(java.lang.Object,__Model.__FieldID,@prim)>
+
+<__Model.__JNI: void SetStaticObjectField(java.lang.Object,__Model.__FieldID,java.lang.Object)>
+<__Model.__JNI: void SetStatic@PrimField(java.lang.Object,__Model.__FieldID,@prim)>
+
+
+<__Model.__JNI: java.lang.Object NewObject(__Model.__Class,__Model.__MethodID,java.lang.Object...)>
+
+
+<__Model.__JNI: java.lang.String NewStringUTF(java.lang.String)>
+<__Model.__JNI: __Model.__Pointer GetStringUTFChars(java.lang.Object,int)>
+
+
+<__Model.__JNI: java.lang.Object GetObjectArrayElement(java.lang.Object[],int)>
+<__Model.__JNI: @prim Get@PrimArrayElement(java.lang.Object[],int)>
+
+
+<__Model.__JNI: void RegisterNatives(__Model.__Class,java.lang.Object[],int)>
