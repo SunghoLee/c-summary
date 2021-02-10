@@ -24,7 +24,7 @@ Install the following libraries using ```opam install [library]```
 ### Installation steps
 After installing the additional prerequisites, the remainig installation steps are completely same with the Infer static analyzer. See "Install Infer from source" in [INSTALL.md](https://github.com/facebook/infer/blob/master/INSTALL.md) to build Infer and this tool. When the installation is done, execute a script ``make_summ.sh`` to build C Semantic Summary Extractor and other subsidiary tools.
 
-## Using Docker container instead of installation
+## Docker image
 Since the Infer installation may have lots of issues, we recommend to use the [Docker image](https://hub.docker.com/r/yhuai/c-summary-image) on which c-summary is prebuilt. Thank Yuqi Huai (UC Irvine) for the contribution!
 
 ## Run C Semantic Summary Extractor
